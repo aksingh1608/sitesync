@@ -1,36 +1,60 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# SiteSync
 
-## Getting Started
+Offline-first field coordination demo for **Demo Electrical Co.** (fictional company, fictional data).
 
-First, run the development server:
+Field crews often have no signal. SiteSync records every action on the device first, syncs it
+when it can, and lets the office see whether each instruction was delivered, seen and
+acknowledged.
+
+**This is Day 1: the foundation.** It includes the data model, event-sourced sync API, offline
+outbox, PWA shell, demo role picker, a basic task list and a sync debug console.
+
+## Requirements
+
+- Node.js 24 (`nvm use`)
+- pnpm 12
+- A Postgres database on [Neon](https://neon.tech) (free tier is fine)
+
+## Setup
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+pnpm install
+cp .env.example .env.local      # then set DATABASE_URL to your Neon *pooled* connection string
+pnpm db:migrate                 # create tables
+pnpm db:seed                    # load demo data (wipes existing data)
+pnpm dev                        # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The service worker is disabled in `pnpm dev`. To test offline behaviour and installability, run
+a production build:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+pnpm build && pnpm start
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Trying it
 
-## Learn More
+1. Open `/` and pick a person. **Demo mode, no real login.** Sam Novak (technician) has the
+   most varied tasks.
+2. `/field` shows that person's tasks from the on-device database, grouped into Today,
+   This Week, This Month and Follow-ups.
+3. `/debug` shows the device id, cursor and outbox. It has buttons to sync, simulate offline,
+   create a test task, acknowledge a task and reset local data.
 
-To learn more about Next.js, take a look at the following resources:
+To demo offline, turn on **Simulate offline** in `/debug`, or set DevTools → Network to
+Offline. Create a task and acknowledge one, then reload. The app still loads and the pending
+events are still there. Go back online and press **Sync now**. The outbox empties, and the
+server stores each event exactly once.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Scripts
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+| Script | What it does |
+| --- | --- |
+| `pnpm dev` / `build` / `start` | Next.js |
+| `pnpm lint` / `typecheck` / `test` | ESLint / `tsc` / Vitest (uses in-memory PGlite, no database needed) |
+| `pnpm db:generate` | Generate a migration after editing `lib/db/schema.ts` |
+| `pnpm db:migrate` | Apply migrations to `DATABASE_URL` |
+| `pnpm db:seed` | Wipe and reseed demo data |
+| `pnpm db:studio` | Drizzle Studio |
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+See `CLAUDE.md` for the architecture rules and the 6-day plan.

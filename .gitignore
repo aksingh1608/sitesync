@@ -49,3 +49,6 @@ public/swe-worker*
 
 # local pglite data
 /.pglite
+
+# local media fallback (dev only)
+.data/

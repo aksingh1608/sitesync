@@ -1,0 +1,42 @@
+{
+  "name": "sitesync",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "1.2.1",
+    "@serwist/turbopack": "9.5.13",
+    "dexie": "4.4.7",
+    "dexie-react-hooks": "4.4.0",
+    "drizzle-orm": "0.45.4",
+    "esbuild": "^0.28.2",
+    "next": "16.4.6",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "serwist": "9.5.13",
+    "ws": "8.23.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.16",
+    "@tailwindcss/turbopack": "4.3.3",
+    "@types/node": "^24.19.2",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@types/ws": "^8.18.2",
+    "dotenv": "^18.0.10",
+    "drizzle-kit": "0.31.11",
+    "eslint": "^9",
+    "eslint-config-next": "16.4.6",
+    "tailwindcss": "4.3.3",
+    "tsx": "^4.23.15",
+    "typescript": "6.0.3",
+    "vitest": "5.1.0"
+  },
+  "packageManager": "pnpm@12.18.0"
+}

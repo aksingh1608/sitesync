@@ -21,6 +21,7 @@ export type Db = PgDatabase<PgQueryResultHKT, any>;
 const nextSeq = sql`nextval('sync_seq')`;
 
 function withoutSeq<T extends { seq?: number }>(row: T): Omit<T, "seq"> {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { seq: _seq, ...rest } = row;
   return rest;
 }

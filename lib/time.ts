@@ -21,17 +21,6 @@ export function addDays(key: string, days: number): string {
   return utcToKey(d);
 }
 
-/** Last day (Sunday) of the Monday-start week containing `key`. */
-export function endOfWeek(key: string): string {
-  const dow = keyToUtc(key).getUTCDay(); // 0 = Sunday
-  return addDays(key, dow === 0 ? 0 : 7 - dow);
-}
-
-export function endOfMonth(key: string): string {
-  const d = keyToUtc(key);
-  return utcToKey(new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)));
-}
-
 /**
  * The instant at local wall-clock `hh:mm` on day `key` in `timeZone`.
  * Two passes handle DST transitions correctly for normal hours.

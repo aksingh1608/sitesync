@@ -12,7 +12,14 @@ declare const self: ServiceWorkerGlobalScope;
 
 const serwist = new Serwist({
   precacheEntries: self.__SW_MANIFEST,
-  skipWaiting: true,
+  // Field pages take ?id= / ?taskId=; they are all served by the same precached shell.
+  precacheOptions: { ignoreURLParametersMatching: [/^utm_/, /^id$/, /^taskId$/] },
+  // Updates: a new worker WAITS instead of taking over a running page (whose
+  // JS chunks it would otherwise delete). The page shows "Update available",
+  // and on tap posts SKIP_WAITING (handled by Serwist), then reloads once the
+  // new worker controls it. The outbox lives in IndexedDB, which an update
+  // never touches. clientsClaim only matters for the very first install.
+  skipWaiting: false,
   clientsClaim: true,
   navigationPreload: true,
   runtimeCaching: [

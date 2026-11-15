@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { SerwistProvider } from "@serwist/turbopack/react";
 import { SyncManager } from "@/components/sync-manager";
+import { UpdateBanner } from "@/components/update-banner";
 import { APP_NAME, COMPANY_NAME, THEME_COLOR } from "@/lib/config";
 import "./globals.css";
 
@@ -31,8 +32,14 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en" className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}>
       <body className="min-h-full flex flex-col bg-background text-foreground">
-        <SerwistProvider swUrl="/serwist/sw.js" disable={process.env.NODE_ENV === "development"}>
+        {/* reloadOnOnline is off: a reload when signal returns would cut off a voice recording. */}
+        <SerwistProvider
+          swUrl="/serwist/sw.js"
+          disable={process.env.NODE_ENV === "development"}
+          reloadOnOnline={false}
+        >
           <SyncManager />
+          <UpdateBanner />
           {children}
         </SerwistProvider>
       </body>

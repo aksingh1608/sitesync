@@ -4,7 +4,17 @@
 //    rejected ones, merge server changes, re-apply still-pending events on top.
 // No Background Sync API (iOS Safari lacks it). See SyncManager for triggers.
 import { EventSchema, type EventDraft, type SyncEvent } from "../events";
-import { getMeta, localDb, setMeta, type LastSyncResult, type Meta, type OutboxItem } from "../db/local";
+import {
+  getMeta,
+  localDb,
+  receiptMarkId,
+  setMeta,
+  type LastSyncResult,
+  type MediaItem,
+  type Meta,
+  type OutboxItem,
+  type ReceiptMark,
+} from "../db/local";
 import { uuidv4 } from "../uuid";
 import { applyEvent } from "./apply";
 import { MAX_EVENTS_PER_SYNC, type SyncRequest, type WireSyncResponse } from "./protocol";
@@ -14,6 +24,8 @@ export const ACTOR_COOKIE = "sitesync_actor";
 const SYNC_TIMEOUT_MS = 20_000;
 const BACKOFF_BASE_MS = 2_000;
 const BACKOFF_MAX_MS = 5 * 60_000;
+/** Safety valve for one sync run (pages + follow-up rounds). */
+const MAX_ROUNDS = 100;
 
 export class LocalRejectError extends Error {
   constructor(public reason: string) {
@@ -86,24 +98,41 @@ export async function setActor(actorId: string): Promise<void> {
 // ---------------------------------------------------------------------------
 // Writes
 // ---------------------------------------------------------------------------
-export async function enqueue(draft: EventDraft, opts: { autoSync?: boolean } = {}): Promise<SyncEvent> {
+export type EnqueueOptions = {
+  autoSync?: boolean;
+  /** Only enqueue if this device has not sent this receipt for this person before. */
+  once?: { taskId: string; type: ReceiptMark["type"] };
+  /** A recorded blob to store with the event, atomically (voice / photo notes). */
+  media?: Omit<MediaItem, "actorId">;
+};
+
+/**
+ * Validate, apply optimistically, and add to the outbox, in one transaction.
+ * Returns null when `once` says it was already sent.
+ */
+export async function enqueue(draft: EventDraft, opts: EnqueueOptions = {}): Promise<SyncEvent | null> {
   const meta = await getMeta();
   if (!meta.actorId) throw new Error("No actor selected");
+  const actorId = meta.actorId;
   const deviceId = meta.deviceId || (await ensureDeviceId());
   const event = EventSchema.parse({
     ...draft,
     id: uuidv4(),
-    actorId: meta.actorId,
+    actorId,
     deviceId,
     clientTs: new Date().toISOString(),
   });
 
-  await localDb.transaction("rw", [...localDb.cacheTables, localDb.outbox], async () => {
+  const tables = [...localDb.cacheTables, localDb.outbox, localDb.receiptMarks, localDb.media];
+  const added = await localDb.transaction("rw", tables, async () => {
+    const markId = opts.once ? receiptMarkId(actorId, opts.once.taskId, opts.once.type) : null;
+    if (markId && (await localDb.receiptMarks.get(markId))) return false;
+
     const result = await applyEvent(dexieStore(localDb), event, new Date());
     if (!result.ok) throw new LocalRejectError(result.reason);
     await localDb.outbox.add({
       id: event.id,
-      actorId: event.actorId,
+      actorId,
       type: event.type,
       event,
       status: "pending",
@@ -113,16 +142,39 @@ export async function enqueue(draft: EventDraft, opts: { autoSync?: boolean } = 
       rejectReason: null,
       createdAt: new Date(),
     });
+    if (markId && opts.once) {
+      await localDb.receiptMarks.put({ id: markId, actorId, ...opts.once, at: new Date() });
+    }
+    if (opts.media) await localDb.media.add({ ...opts.media, actorId });
+    return true;
   });
+  if (!added) return null;
 
   if (opts.autoSync !== false) void sync().catch(() => {});
   return event;
+}
+
+/** `task.seen`: the first time this person opens the task on this device. */
+export async function markSeen(taskId: string): Promise<boolean> {
+  const meta = await getMeta();
+  if (!meta.actorId) return false;
+  const [task, receipt] = await Promise.all([
+    localDb.tasks.get(taskId),
+    localDb.taskReceipts.get([taskId, meta.actorId]),
+  ]);
+  if (!task || task.assigneeId !== meta.actorId || receipt?.seenAt) return false;
+  return (await enqueue({ type: "task.seen", payload: { taskId } }, { once: { taskId, type: "task.seen" } })) !== null;
 }
 
 // ---------------------------------------------------------------------------
 // Sync
 // ---------------------------------------------------------------------------
 let inflight: Promise<LastSyncResult> | null = null;
+let afterSync: (() => void) | null = null;
+/** Runs after every successful sync (the media upload queue hooks in here). */
+export function setAfterSync(fn: (() => void) | null) {
+  afterSync = fn;
+}
 
 /** Single-flight: concurrent callers share one run. Also locked across tabs. */
 export function sync(opts: { manual?: boolean } = {}): Promise<LastSyncResult> {
@@ -135,10 +187,20 @@ export function sync(opts: { manual?: boolean } = {}): Promise<LastSyncResult> {
     }
     return runSync(opts);
   };
-  inflight = run().finally(() => {
-    inflight = null;
-  });
+  inflight = run()
+    .then((result) => {
+      if (result.status === "ok") afterSync?.();
+      return result;
+    })
+    .finally(() => {
+      inflight = null;
+    });
   return inflight;
+}
+
+/** Resolves when no sync is running in this tab (used before reloading for an update). */
+export async function whenIdle(): Promise<void> {
+  while (inflight) await inflight.catch(() => {});
 }
 
 const nowIso = () => new Date().toISOString();
@@ -173,9 +235,9 @@ async function runSync(opts: { manual?: boolean }): Promise<LastSyncResult> {
   let batch: OutboxItem[] = [];
   try {
     let cursor = meta.cursor;
-    // A few rounds: drain >200 pending events, send auto-generated receipts,
-    // and rebuild the cache after a rejection.
-    for (let round = 0; round < 10; round++) {
+    // Rounds: drain >200 pending events, page through a large pull (hasMore),
+    // send auto-generated receipts, and rebuild the cache after a rejection.
+    for (let round = 0; round < MAX_ROUNDS; round++) {
       batch = await pendingFor(meta.actorId);
       const res = await transport({
         deviceId: meta.deviceId,
@@ -189,7 +251,8 @@ async function runSync(opts: { manual?: boolean }): Promise<LastSyncResult> {
       totals.accepted += res.accepted.length;
       totals.duplicates += res.duplicates.length;
       totals.rejected.push(...res.rejected);
-      totals.pulled += Object.values(res.changes).reduce((n, rows) => n + rows.length, 0);
+      totals.pulled += Object.values(res.changes).reduce((n, rows) => n + rows.length, 0) + res.revocations.length;
+      batch = [];
 
       if (res.rejected.length > 0) {
         // A rejected event may have left optimistic state behind: rebuild the
@@ -198,6 +261,7 @@ async function runSync(opts: { manual?: boolean }): Promise<LastSyncResult> {
         await setMeta({ cursor: null });
         continue;
       }
+      if (res.hasMore) continue; // next page
       const delivered = await enqueueDeliveredReceipts(meta.actorId);
       const more = (await pendingFor(meta.actorId, 1)).length > 0;
       if (!more && delivered === 0) break;
@@ -259,6 +323,13 @@ async function mergeResponse(meta: Meta, res: WireSyncResponse, fullReplace: boo
 
     // 2. Server rows win. A full pull replaces the cache entirely.
     if (fullReplace) await Promise.all(localDb.cacheTables.map((t) => t.clear()));
+    //    Rows this person can no longer see leave the device. Revocations come
+    //    first: a task handed back later has a higher seq, so it is re-added below.
+    const revokedTasks = res.revocations.filter((r) => r.entity === "task").map((r) => r.entityId);
+    if (revokedTasks.length) {
+      await localDb.tasks.bulkDelete(revokedTasks);
+      await localDb.taskReceipts.where("taskId").anyOf(revokedTasks).delete();
+    }
     await localDb.tasks.bulkPut(revive(c.tasks, DATE_FIELDS.tasks));
     await localDb.taskReceipts.bulkPut(revive(c.task_receipts, DATE_FIELDS.task_receipts));
     await localDb.timeEntries.bulkPut(revive(c.time_entries, DATE_FIELDS.time_entries));
@@ -284,19 +355,16 @@ async function mergeResponse(meta: Meta, res: WireSyncResponse, fullReplace: boo
  */
 async function enqueueDeliveredReceipts(actorId: string): Promise<number> {
   const mine = await localDb.tasks.where("assigneeId").equals(actorId).toArray();
-  const queued = new Set(
-    (await localDb.outbox.where("[actorId+status]").equals([actorId, "pending"]).toArray())
-      .filter((i) => i.type === "task.delivered")
-      .map((i) => (i.event.payload as { taskId: string }).taskId),
-  );
   let n = 0;
   for (const task of mine) {
-    if (task.seq === undefined || queued.has(task.id)) continue;
+    if (task.seq === undefined) continue; // not from the server yet
     const receipt = await localDb.taskReceipts.get([task.id, actorId]);
-    if (receipt && receipt.deliveredAt === null) {
-      await enqueue({ type: "task.delivered", payload: { taskId: task.id } }, { autoSync: false });
-      n++;
-    }
+    if (!receipt || receipt.deliveredAt !== null) continue;
+    const ev = await enqueue(
+      { type: "task.delivered", payload: { taskId: task.id } },
+      { autoSync: false, once: { taskId: task.id, type: "task.delivered" } },
+    );
+    if (ev) n++;
   }
   return n;
 }

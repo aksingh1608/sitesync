@@ -43,6 +43,43 @@ export type LastSyncResult =
   | { status: "offline"; at: string; simulated: boolean }
   | { status: "skipped"; at: string; reason: string };
 
+/** A recorded voice note or photo, kept on the device until it is uploaded. */
+export interface MediaItem {
+  /** Client UUID; `note.created` references it as `mediaId`. */
+  id: string;
+  actorId: string;
+  noteId: string;
+  kind: "voice" | "photo";
+  /** Dropped (set to null) once the server has the blob URL, to free space. */
+  blob: Blob | null;
+  mimeType: string;
+  sizeBytes: number;
+  durationSec: number | null;
+  status: "pending" | "uploaded";
+  attempts: number;
+  lastError: string | null;
+  /** Earliest time of the next upload attempt (same backoff as the outbox). */
+  nextAttemptAt: Date | null;
+  blobUrl: string | null;
+  createdAt: Date;
+}
+
+/**
+ * "This device already sent this receipt for this person." Receipts like
+ * `task.delivered` must fire once per device and person, even after the cache
+ * is rebuilt. Key: `${actorId}:${taskId}:${type}`.
+ */
+export interface ReceiptMark {
+  id: string;
+  actorId: string;
+  taskId: string;
+  type: "task.delivered" | "task.seen";
+  at: Date;
+}
+
+export const receiptMarkId = (actorId: string, taskId: string, type: ReceiptMark["type"]) =>
+  `${actorId}:${taskId}:${type}`;
+
 export type DirectoryEntry = { id: string; name: string; role: string; trade: string };
 
 export interface Meta {
@@ -72,9 +109,14 @@ export class LocalDb extends Dexie {
   people!: Table<PersonRow, string>;
   rollouts!: Table<CachedRollout, string>;
   meta!: Table<MetaRow, string>;
+  media!: Table<MediaItem, string>;
+  receiptMarks!: Table<ReceiptMark, string>;
 
-  constructor() {
-    super("sitesync");
+  constructor(name = "sitesync") {
+    super(name);
+    // Schema versions. NEVER edit a released version: add a new one (see
+    // CLAUDE.md "Dexie schema versioning"). Dexie diffs the declared stores and
+    // only touches tables that changed, so the outbox is preserved.
     this.version(1).stores({
       outbox: "++seq, &id, status, actorId, [actorId+status]",
       tasks: "id, assigneeId, createdBy, siteId, dueAt, status, seq",
@@ -87,6 +129,26 @@ export class LocalDb extends Dexie {
       rollouts: "id",
       meta: "key",
     });
+    // v2 (Day 2): media upload queue and per-device receipt marks.
+    this.version(2)
+      .stores({
+        media: "id, noteId, [actorId+status]",
+        receiptMarks: "id, [actorId+taskId]",
+      })
+      .upgrade(async (tx) => {
+        // Receipts already waiting in the outbox count as sent from this device.
+        const receipts = await tx
+          .table<OutboxItem, number>("outbox")
+          .filter((i) => i.type === "task.delivered" || i.type === "task.seen")
+          .toArray();
+        await tx.table<ReceiptMark, string>("receiptMarks").bulkPut(
+          receipts.map((i) => {
+            const taskId = (i.event.payload as { taskId: string }).taskId;
+            const type = i.type as ReceiptMark["type"];
+            return { id: receiptMarkId(i.actorId, taskId, type), actorId: i.actorId, taskId, type, at: i.createdAt };
+          }),
+        );
+      });
   }
 
   /** The cache tables that mirror server projections. */
@@ -105,6 +167,12 @@ export class LocalDb extends Dexie {
 }
 
 export const localDb = new LocalDb();
+
+// Another tab opened a newer schema version. Dexie closes this connection so the
+// upgrade can proceed; tell the UI this tab is stale so it offers a reload.
+localDb.on("versionchange", (ev) => {
+  if (typeof window !== "undefined" && ev.newVersion) window.dispatchEvent(new Event("sitesync:stale"));
+});
 
 const META_DEFAULTS: Omit<Meta, "deviceId"> = {
   directory: [],

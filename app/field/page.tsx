@@ -1,45 +1,57 @@
 "use client";
-import Link from "next/link";
-// Day 1 placeholder for the field app. Reads ONLY from Dexie (useLiveQuery).
+// Task list. Reads ONLY from Dexie (useLiveQuery).
 import { useLiveQuery } from "dexie-react-hooks";
-import { Badge } from "@/components/ui/badge";
-import { SyncStatus } from "@/components/sync-status";
-import { formatTime, useActor, useMeta } from "@/components/use-local";
+import Link from "next/link";
+import { useState } from "react";
+import { usePendingRefs, useNow } from "@/components/field/hooks";
+import { TaskCard } from "@/components/field/task-card";
+import { Chip, PageTitle } from "@/components/field/ui";
+import { useActor, useMeta } from "@/components/use-local";
 import { BRANCH_TIMEZONE } from "@/lib/config";
 import { localDb } from "@/lib/db/local";
-import { groupTasks, isOverdue, type TaskGroups } from "@/lib/tasks/grouping";
-import type { ReceiptRow, TaskRow } from "@/lib/sync/reducers";
+import { TERMINAL_STATUSES } from "@/lib/domain";
+import { groupTasks, isOverdue, type GroupKey } from "@/lib/tasks/grouping";
+import type { TaskRow } from "@/lib/sync/reducers";
+import { cn } from "@/lib/utils";
 
-const GROUPS: [keyof TaskGroups, string][] = [
-  ["today", "Today"],
-  ["thisWeek", "This Week"],
-  ["thisMonth", "This Month"],
-  ["followUps", "Follow-ups"],
-  ["later", "Later / no date"],
-  ["closed", "Done / cancelled"],
+const GROUPS: { key: GroupKey; label: string; alwaysShow?: boolean }[] = [
+  { key: "overdue", label: "Overdue" },
+  { key: "today", label: "Today", alwaysShow: true },
+  { key: "thisWeek", label: "This Week", alwaysShow: true },
+  { key: "thisMonth", label: "This Month", alwaysShow: true },
+  { key: "followUps", label: "Follow-ups", alwaysShow: true },
+  { key: "later", label: "Later / no date" },
+  { key: "closed", label: "Done / cancelled" },
 ];
 
-function receiptLabel(r: ReceiptRow | undefined) {
-  if (!r) return "not sent";
-  if (r.acknowledgedAt) return "acknowledged";
-  if (r.seenAt) return "seen";
-  if (r.deliveredAt) return "delivered";
-  return "sent";
-}
+const FILTERS = {
+  all: { label: "All", test: () => true },
+  open: { label: "Open", test: (t: TaskRow) => t.status === "open" || t.status === "in_progress" },
+  blocked: { label: "Blocked", test: (t: TaskRow) => t.status === "blocked" },
+  done: { label: "Done", test: (t: TaskRow) => TERMINAL_STATUSES.includes(t.status) },
+} as const;
+type FilterKey = keyof typeof FILTERS;
 
 export default function FieldPage() {
   const meta = useMeta();
   const actorId = meta?.actorId ?? null;
   const actor = useActor(actorId);
+  const pending = usePendingRefs(actorId);
+  const now = useNow(60_000);
+  const [filter, setFilter] = useState<FilterKey>("all");
+
   const data = useLiveQuery(async () => {
     if (!actorId) return null;
-    const [tasks, receipts, sites] = await Promise.all([
+    const [mine, created, receipts, sites] = await Promise.all([
       localDb.tasks.where("assigneeId").equals(actorId).toArray(),
+      localDb.tasks.where("createdBy").equals(actorId).toArray(),
       localDb.taskReceipts.where("personId").equals(actorId).toArray(),
       localDb.sites.toArray(),
     ]);
     return {
-      tasks,
+      mine,
+      // Requests I sent to someone else (material requests, follow-ups).
+      requests: created.filter((t) => t.assigneeId !== actorId),
       receipts: new Map(receipts.map((r) => [r.taskId, r])),
       sites: new Map(sites.map((s) => [s.id, s.name])),
     };
@@ -47,65 +59,67 @@ export default function FieldPage() {
 
   if (meta && !actorId) {
     return (
-      <main className="mx-auto max-w-xl p-4">
-        <p>
-          No one selected.{" "}
-          <Link className="underline" href="/">
-            Pick a person
-          </Link>
-          .
-        </p>
-      </main>
+      <p className="text-lg">
+        No one selected.{" "}
+        <Link className="font-bold underline" href="/">
+          Pick a person
+        </Link>
+        .
+      </p>
     );
   }
 
-  const now = new Date();
-  const groups = data ? groupTasks(data.tasks, now, BRANCH_TIMEZONE) : null;
+  const visible = data ? data.mine.filter(FILTERS[filter].test) : [];
+  const groups = data ? groupTasks(visible, now, BRANCH_TIMEZONE) : null;
+  const counts = data ? Object.fromEntries(Object.entries(FILTERS).map(([k, f]) => [k, data.mine.filter(f.test).length])) : {};
 
   return (
-    <main className="mx-auto w-full max-w-xl p-4 space-y-4">
-      <header className="space-y-2">
-        <div className="flex items-baseline justify-between">
-          <h1 className="text-xl font-semibold">My tasks</h1>
-          <nav className="flex gap-3 text-sm">
-            <Link className="underline" href="/debug">
-              Debug
-            </Link>
-            <Link className="underline" href="/">
-              Switch person
-            </Link>
-          </nav>
-        </div>
-        <p className="text-sm text-muted-foreground">
-          {actor ? `${actor.name} · ${actor.role} · ${actor.trade}` : "Loading…"}
-        </p>
-        <SyncStatus />
-      </header>
+    <>
+      <PageTitle sub={actor ? `${actor.name} · ${actor.role}` : "Loading…"}>My tasks</PageTitle>
+
+      <div className="flex flex-wrap gap-2" role="group" aria-label="Filter tasks">
+        {(Object.keys(FILTERS) as FilterKey[]).map((k) => (
+          <Chip key={k} active={filter === k} onClick={() => setFilter(k)} data-testid={`filter-${k}`}>
+            {FILTERS[k].label} ({counts[k] ?? 0})
+          </Chip>
+        ))}
+      </div>
 
       {!groups ? (
-        <p className="text-sm text-muted-foreground">Loading from this device…</p>
-      ) : data!.tasks.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No tasks on this device yet. Sync to fetch them.</p>
+        <p className="text-slate-700">Loading from this device…</p>
+      ) : data!.mine.length === 0 ? (
+        <p className="text-slate-700">No tasks on this device yet. Tap the bar at the top to sync.</p>
       ) : (
-        GROUPS.map(([key, label]) => {
+        GROUPS.map(({ key, label, alwaysShow }) => {
           const list = groups[key];
-          if (!list.length && (key === "later" || key === "closed")) return null;
+          if (!list.length && (!alwaysShow || filter !== "all")) return null;
+          const red = key === "overdue";
           return (
             <section key={key} className="space-y-2" data-testid={`group-${key}`}>
-              <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-                {label} <span className="font-normal">({list.length})</span>
+              <h2 className={cn("flex items-center gap-2 text-xl font-bold", red ? "text-red-700" : "text-slate-950")}>
+                {label}
+                <span
+                  className={cn(
+                    "rounded-full px-2.5 text-base",
+                    red ? "bg-red-700 text-white" : "bg-slate-800 text-white",
+                  )}
+                >
+                  {list.length}
+                </span>
               </h2>
               {list.length === 0 ? (
-                <p className="text-sm text-muted-foreground">Nothing here.</p>
+                <p className="text-base text-slate-600">Nothing here.</p>
               ) : (
-                <ul className="divide-y rounded-md border">
+                <ul className="space-y-2">
                   {list.map((t) => (
-                    <TaskItem
+                    <TaskCard
                       key={t.id}
                       task={t}
-                      site={data!.sites.get(t.siteId)}
+                      siteName={data!.sites.get(t.siteId)}
                       receipt={data!.receipts.get(t.id)}
                       overdue={isOverdue(t, now, BRANCH_TIMEZONE)}
+                      pending={pending.tasks.has(t.id) || t.seq === undefined}
+                      showDate={key !== "today"}
                     />
                   ))}
                 </ul>
@@ -114,37 +128,25 @@ export default function FieldPage() {
           );
         })
       )}
-    </main>
-  );
-}
 
-function TaskItem({
-  task,
-  site,
-  receipt,
-  overdue,
-}: {
-  task: TaskRow;
-  site: string | undefined;
-  receipt: ReceiptRow | undefined;
-  overdue: boolean;
-}) {
-  return (
-    <li className="p-3 space-y-1" data-testid="task-item">
-      <div className="flex items-start justify-between gap-2">
-        <span className={task.status === "done" ? "line-through" : "font-medium"}>{task.title}</span>
-        <span className="flex shrink-0 gap-1">
-          {task.seq === undefined && <Badge variant="outline">not synced</Badge>}
-          {overdue && <Badge variant="destructive">overdue</Badge>}
-          {(task.priority === "high" || task.priority === "urgent") && <Badge>{task.priority}</Badge>}
-        </span>
-      </div>
-      <div className="flex flex-wrap gap-x-3 text-xs text-muted-foreground">
-        <span>{site ?? "Unknown site"}</span>
-        <span>Due {formatTime(task.dueAt)}</span>
-        <span>{task.status.replace("_", " ")}</span>
-        <span>Receipt: {receiptLabel(receipt)}</span>
-      </div>
-    </li>
+      {data && data.requests.length > 0 && filter === "all" && (
+        <section className="space-y-2" data-testid="group-requests">
+          <h2 className="text-xl font-bold">My requests ({data.requests.length})</h2>
+          <ul className="space-y-2">
+            {data.requests.map((t) => (
+              <TaskCard
+                key={t.id}
+                task={t}
+                siteName={data.sites.get(t.siteId)}
+                receipt={undefined}
+                overdue={false}
+                pending={pending.tasks.has(t.id) || t.seq === undefined}
+                showDate
+              />
+            ))}
+          </ul>
+        </section>
+      )}
+    </>
   );
 }

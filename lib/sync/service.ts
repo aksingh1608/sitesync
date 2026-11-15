@@ -22,7 +22,7 @@ export type SyncOutcome =
 export async function processSync(
   db: Db,
   req: SyncRequest,
-  opts: { now?: () => Date } = {},
+  opts: { now?: () => Date; pageSize?: number } = {},
 ): Promise<SyncOutcome> {
   const now = opts.now ?? (() => new Date());
 
@@ -102,7 +102,7 @@ export async function processSync(
     }
 
     const cursor = req.cursor === null ? 0 : Number(req.cursor);
-    const pulled = await pullChanges(tx, actor, cursor);
+    const pulled = await pullChanges(tx, actor, cursor, opts.pageSize);
     return {
       ok: true as const,
       response: {
@@ -110,7 +110,9 @@ export async function processSync(
         duplicates,
         rejected,
         changes: pulled.changes,
+        revocations: pulled.revocations,
         cursor: String(pulled.cursor),
+        hasMore: pulled.hasMore,
         serverTime: now().toISOString(),
       },
     };

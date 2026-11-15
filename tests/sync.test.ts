@@ -259,7 +259,7 @@ describe("receipts", () => {
     const res = await sync(db, ids.techB, [
       event({ type: "task.seen", actorId: ids.techB, clientTs: at("2026-11-15T10:00:00Z"), payload: { taskId } }),
     ]);
-    expect(res.rejected[0].reason).toBe("not_a_recipient");
+    expect(res.rejected[0].reason).toBe("forbidden");
   });
 });
 

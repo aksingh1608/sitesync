@@ -4,6 +4,12 @@
 export const ROLES = ["technician", "foreman", "coordinator", "hr", "manager"] as const;
 export type Role = (typeof ROLES)[number];
 
+/** Roles that may create tasks for others, reassign, and edit title / due date / priority. */
+export const TASK_MANAGER_ROLES: readonly Role[] = ["coordinator", "manager"];
+export const canManageTasks = (role: Role) => TASK_MANAGER_ROLES.includes(role);
+/** Task kinds anyone may create when they assign them to a coordinator. */
+export const REQUEST_TASK_KINDS: readonly TaskKind[] = ["material_request", "follow_up"];
+
 /** Roles that see everything. Field roles see only their own work. */
 export const OFFICE_ROLES: readonly Role[] = ["coordinator", "hr", "manager"];
 export const FIELD_ROLES: readonly Role[] = ["technician", "foreman"];
@@ -54,6 +60,18 @@ export const WORKER_STATUSES = ["on_site", "lunch", "traveling", "off"] as const
 export type WorkerStatus = (typeof WORKER_STATUSES)[number];
 
 export const NOTE_KINDS = ["text", "voice", "photo"] as const;
+
+/** Why a clock-in/out has no location. */
+export const LOCATION_ERRORS = ["denied", "unavailable", "timeout", "unsupported"] as const;
+export type LocationError = (typeof LOCATION_ERRORS)[number];
+
+/** Server uploads on Vercel are capped at 4.5 MB per request. */
+export const MAX_MEDIA_BYTES = 4_000_000;
+export const MAX_VOICE_SECONDS = 120;
+
+/** Entities a person can lose visibility of (see `revocations`). */
+export const REVOCABLE_ENTITIES = ["task"] as const;
+export type RevocableEntity = (typeof REVOCABLE_ENTITIES)[number];
 export type NoteKind = (typeof NOTE_KINDS)[number];
 
 /** Day 4+ (escalation ladder). Defined now so the schema is stable. */

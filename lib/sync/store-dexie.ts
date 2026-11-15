@@ -25,5 +25,7 @@ export function dexieStore(db: LocalDb): SyncStore {
     putStatusUpdate: async (row) => void (await db.statusUpdates.put(row)),
     putNote: async (row) => void (await db.fieldNotes.put(row)),
     touchSite: async () => {},
+    // Revocations are decided by the server and arrive with the next pull.
+    revoke: async () => {},
   };
 }

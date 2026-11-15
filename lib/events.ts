@@ -2,6 +2,8 @@
 // and server. Every client write is one of these events.
 import { z } from "zod";
 import {
+  LOCATION_ERRORS,
+  MAX_MEDIA_BYTES,
   NOTE_KINDS,
   TASK_KINDS,
   TASK_PRIORITIES,
@@ -71,6 +73,8 @@ export const ClockInPayload = z.strictObject({
   lng: lng.nullable(),
   accuracyM: z.number().nonnegative().max(100_000).nullable(),
   safetyCheckDone: z.boolean().default(false),
+  /** Why lat/lng are null, so HR can tell "indoors" from "permission denied". */
+  locationError: z.enum(LOCATION_ERRORS).nullable().default(null),
 });
 
 export const ClockOutPayload = z.strictObject({
@@ -78,10 +82,12 @@ export const ClockOutPayload = z.strictObject({
   lat: lat.nullable(),
   lng: lng.nullable(),
   accuracyM: z.number().nonnegative().max(100_000).nullable().default(null),
+  locationError: z.enum(LOCATION_ERRORS).nullable().default(null),
 });
 
 export const StatusSetPayload = z.strictObject({
-  status: z.enum(WORKER_STATUSES),
+  /** Null clears the (optional) status. */
+  status: z.enum(WORKER_STATUSES).nullable(),
   note: z.string().max(500).nullable().default(null),
 });
 
@@ -93,8 +99,21 @@ export const NoteCreatedPayload = z
     kind: z.enum(NOTE_KINDS),
     text: z.string().max(10_000).nullable().default(null),
     blobUrl: z.url().nullable().default(null),
+    /** Local media id (Dexie `media` table). The blob is uploaded later, then `note.media_uploaded`. */
+    mediaId: id.nullable().default(null),
   })
-  .refine((n) => n.text !== null || n.blobUrl !== null, "a note needs text or a blobUrl");
+  .refine(
+    (n) => n.text !== null || n.blobUrl !== null || n.mediaId !== null,
+    "a note needs text, a blobUrl or a mediaId",
+  );
+
+export const NoteMediaUploadedPayload = z.strictObject({
+  noteId: id,
+  blobUrl: z.url().max(2000),
+  mimeType: z.string().min(1).max(100),
+  sizeBytes: z.number().int().nonnegative().max(MAX_MEDIA_BYTES),
+  durationSec: z.number().nonnegative().max(60 * 60).optional(),
+});
 
 const ev = <T extends string, P extends z.ZodType>(type: T, payload: P) =>
   z.strictObject({ ...envelope, type: z.literal(type), payload });
@@ -110,6 +129,7 @@ export const EventSchema = z.discriminatedUnion("type", [
   ev("time.clock_out", ClockOutPayload),
   ev("status.set", StatusSetPayload),
   ev("note.created", NoteCreatedPayload),
+  ev("note.media_uploaded", NoteMediaUploadedPayload),
 ]);
 
 /** A validated event (defaults applied). */

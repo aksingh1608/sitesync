@@ -5,6 +5,7 @@ import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import {
   fieldNotes,
   people,
+  revocations,
   rollouts,
   sites,
   statusUpdates,
@@ -99,6 +100,15 @@ export function drizzleStore(db: Db): SyncStore {
       if (site?.rolloutId) {
         await db.update(rollouts).set({ seq: nextSeq }).where(eq(rollouts.id, site.rolloutId));
       }
+    },
+    revoke: async (actorId, entity, entityId) => {
+      await db
+        .insert(revocations)
+        .values({ actorId, entity, entityId })
+        .onConflictDoUpdate({
+          target: [revocations.actorId, revocations.entity, revocations.entityId],
+          set: { seq: nextSeq },
+        });
     },
   };
 }

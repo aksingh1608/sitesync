@@ -2,7 +2,9 @@
 // state or a rejection. No I/O, no clocks, no randomness. The same functions
 // run on the server (authoritative) and on the client (optimistic apply).
 import {
+  canManageTasks,
   isOfficeRole,
+  REQUEST_TASK_KINDS,
   STATUS_TRANSITIONS,
   TASK_LWW_FIELDS,
   TERMINAL_STATUSES,
@@ -61,9 +63,31 @@ const earliest = (current: Date | null, candidate: Date): Date =>
 
 const sameTime = (a: Date | null, b: Date | null) => (a?.getTime() ?? null) === (b?.getTime() ?? null);
 
-/** Office roles, the assignee and the creator may change a task. */
-const canTouchTask = (actor: PersonRow, task: TaskRow) =>
-  isOfficeRole(actor.role) || task.assigneeId === actor.id || task.createdBy === actor.id;
+// ---------------------------------------------------------------------------
+// Write authorization. Reads are scoped in visibility.ts; writes are checked
+// here, so the client (optimistic apply) and the server enforce the same rules.
+// Every refusal uses the exact reason "forbidden".
+// ---------------------------------------------------------------------------
+export const FORBIDDEN = "forbidden";
+const forbidden = () => reject(FORBIDDEN);
+
+/** Coordinators and managers may act on any task; everyone else only on tasks assigned to them. */
+export const canActOnTask = (actor: PersonRow, task: TaskRow) =>
+  canManageTasks(actor.role) || task.assigneeId === actor.id;
+
+/** Task fields a field worker may edit on a task assigned to them. */
+const ASSIGNEE_EDITABLE_FIELDS: readonly TaskLwwField[] = ["description"];
+
+export function canCreateTask(
+  actor: PersonRow,
+  p: { assigneeId: string; kind: string },
+  assignee: PersonRow,
+): boolean {
+  if (canManageTasks(actor.role)) return true;
+  if (p.assigneeId === actor.id) return true; // your own to-do
+  // Anyone may send a material request or follow-up to a coordinator.
+  return REQUEST_TASK_KINDS.includes(p.kind as never) && assignee.role === "coordinator";
+}
 
 // ---------------------------------------------------------------------------
 // Tasks
@@ -90,9 +114,7 @@ export function reduceTaskCreated(
   if (!ctx.assignee) return reject("assignee_not_found");
   if (!ctx.assignee.active) return reject("assignee_inactive");
   if (p.parentTaskId && !ctx.parent) return reject("parent_task_not_found");
-  if (!isOfficeRole(ctx.actor.role) && ctx.actor.role !== "foreman" && p.assigneeId !== ctx.actor.id) {
-    return reject("forbidden: technicians can only create tasks for themselves");
-  }
+  if (!canCreateTask(ctx.actor, p, ctx.assignee)) return forbidden();
 
   const at = new Date(ev.clientTs);
   const stamp = stampOf(ev);
@@ -140,17 +162,25 @@ export function reduceTaskUpdated(
   task: TaskRow | undefined,
   ev: EventOf<"task.updated">,
   ctx: TaskUpdatedCtx,
-): Result<{ task: TaskRow; changedFields: TaskLwwField[]; newRecipientId: string | null }> {
+): Result<{
+  task: TaskRow;
+  changedFields: TaskLwwField[];
+  newRecipientId: string | null;
+  /** The previous assignee, when they lost visibility of the task by this change. */
+  revokedFrom: string | null;
+}> {
   if (!task) return reject("task_not_found");
-  if (!canTouchTask(ctx.actor, task)) return reject("forbidden");
   const c = ev.payload.changes;
+  if (!canManageTasks(ctx.actor.role)) {
+    const fields = Object.keys(c) as TaskLwwField[];
+    if (task.assigneeId !== ctx.actor.id || fields.some((f) => !ASSIGNEE_EDITABLE_FIELDS.includes(f))) {
+      return forbidden();
+    }
+  }
   if (c.siteId !== undefined && !ctx.site) return reject("site_not_found");
   if (c.assigneeId !== undefined) {
     if (!ctx.assignee) return reject("assignee_not_found");
     if (!ctx.assignee.active) return reject("assignee_inactive");
-    if (!isOfficeRole(ctx.actor.role) && ctx.actor.role !== "foreman" && c.assigneeId !== ctx.actor.id) {
-      return reject("forbidden: technicians cannot reassign tasks");
-    }
   }
 
   const stamp = stampOf(ev);
@@ -164,13 +194,17 @@ export function reduceTaskUpdated(
     if (field === "dueAt") next.dueAt = value === null ? null : new Date(value as string);
     else (next as Record<string, unknown>)[field] = value;
   }
-  if (changedFields.length === 0) return ok({ task, changedFields, newRecipientId: null }, false);
+  if (changedFields.length === 0) {
+    return ok({ task, changedFields, newRecipientId: null, revokedFrom: null }, false);
+  }
 
   const at = new Date(ev.clientTs);
   if (at > next.updatedAt) next.updatedAt = at;
   const newRecipientId =
     changedFields.includes("assigneeId") && next.assigneeId !== task.assigneeId ? next.assigneeId : null;
-  return ok({ task: next, changedFields, newRecipientId });
+  // The old assignee keeps seeing a task they created; otherwise it leaves their device.
+  const revokedFrom = newRecipientId && task.assigneeId !== task.createdBy ? task.assigneeId : null;
+  return ok({ task: next, changedFields, newRecipientId, revokedFrom });
 }
 
 export function reduceTaskStatusChanged(
@@ -179,7 +213,7 @@ export function reduceTaskStatusChanged(
   ctx: { actor: PersonRow },
 ): Result<TaskRow> {
   if (!task) return reject("task_not_found");
-  if (!canTouchTask(ctx.actor, task)) return reject("forbidden");
+  if (!canActOnTask(ctx.actor, task)) return forbidden();
   const stamp = stampOf(ev);
   const current = task.fieldTs.status;
   if (current?.ev === ev.id) return ok(task, false); // same event re-applied
@@ -217,10 +251,10 @@ export function reduceReceipt(
   ev: EventOf<"task.delivered" | "task.seen" | "task.acknowledged">,
 ): Result<ReceiptRow> {
   if (!task) return reject("task_not_found");
+  // Only the person the task is (currently) assigned to records receipts.
+  if (task.assigneeId !== ev.actorId) return forbidden();
   let base = receipt;
   if (!base) {
-    // Only the person the task was sent to can acknowledge receipt of it.
-    if (task.assigneeId !== ev.actorId) return reject("not_a_recipient");
     base = {
       taskId: task.id,
       personId: ev.actorId,
@@ -269,7 +303,7 @@ export function reduceClockIn(
   let flagReason: string | null = null;
   if (p.lat === null || p.lng === null) {
     flagged = true;
-    flagReason = "no_location: device did not provide a location at clock-in";
+    flagReason = `no_location: ${p.locationError ?? "unavailable"} (needs HR review)`;
   } else {
     distance = haversineM(p.lat, p.lng, site.lat, site.lng);
     if (isOutsideGeofence(distance, site.geofenceRadiusM)) {
@@ -300,7 +334,7 @@ export function reduceClockOut(
   ev: EventOf<"time.clock_out">,
 ): Result<TimeEntryRow> {
   if (!entry) return reject("time_entry_not_found");
-  if (entry.personId !== ev.actorId) return reject("forbidden: not your time entry");
+  if (entry.personId !== ev.actorId) return forbidden();
   const at = new Date(ev.clientTs);
   if (entry.clockOutAt) {
     if (entry.clockOutAt.getTime() === at.getTime()) return ok(entry, false);
@@ -337,11 +371,14 @@ export function reduceNoteCreated(
   site: SiteRow | undefined,
   task: TaskRow | undefined,
   ev: EventOf<"note.created">,
+  actor: PersonRow,
 ): Result<FieldNoteRow> {
   const p = ev.payload;
   if (existing) return existing.personId === ev.actorId ? ok(existing, false) : reject("note_exists");
   if (!site) return reject("site_not_found");
   if (p.taskId && !task) return reject("task_not_found");
+  // Field workers note only on their own tasks; the office may note anywhere.
+  if (task && !isOfficeRole(actor.role) && task.assigneeId !== actor.id) return forbidden();
   return ok({
     id: p.noteId,
     personId: ev.actorId,
@@ -350,9 +387,35 @@ export function reduceNoteCreated(
     kind: p.kind,
     text: p.text,
     blobUrl: p.blobUrl,
+    mediaId: p.mediaId,
+    mimeType: null,
+    sizeBytes: null,
+    durationSec: null,
     transcript: null,
     processedAt: null,
     createdAt: new Date(ev.clientTs),
   });
 }
 
+
+/**
+ * The note's blob reached storage. The first upload wins: a retried upload
+ * writes to the same path, so a second event with another URL is ignored.
+ */
+export function reduceNoteMediaUploaded(
+  note: FieldNoteRow | undefined,
+  ev: EventOf<"note.media_uploaded">,
+): Result<FieldNoteRow> {
+  if (!note) return reject("note_not_found");
+  if (note.personId !== ev.actorId) return forbidden();
+  if (note.mediaId === null) return reject("note_has_no_media");
+  if (note.blobUrl !== null) return ok(note, false);
+  const p = ev.payload;
+  return ok({
+    ...note,
+    blobUrl: p.blobUrl,
+    mimeType: p.mimeType,
+    sizeBytes: p.sizeBytes,
+    durationSec: p.durationSec ?? null,
+  });
+}

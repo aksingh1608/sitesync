@@ -31,6 +31,7 @@ import {
   TASK_STATUSES,
   TRADES,
   WORKER_STATUSES,
+  type RevocableEntity,
   type TaskLwwField,
 } from "../domain";
 
@@ -224,7 +225,8 @@ export const statusUpdates = pgTable(
     personId: uuid("person_id")
       .notNull()
       .references(() => people.id),
-    status: workerStatusEnum("status").notNull(),
+    /** Null means the worker cleared their (optional) status. */
+    status: workerStatusEnum("status"),
     note: text("note"),
     at: tsz("at").notNull(),
     seq: seq(),
@@ -246,6 +248,11 @@ export const fieldNotes = pgTable(
     kind: noteKindEnum("kind").notNull(),
     text: text("text"),
     blobUrl: text("blob_url"),
+    /** Client-side media id; the blob is uploaded after the note syncs. */
+    mediaId: uuid("media_id"),
+    mimeType: text("mime_type"),
+    sizeBytes: integer("size_bytes"),
+    durationSec: doublePrecision("duration_sec"),
     transcript: text("transcript"),
     /** Set by the field report agent (Day 4) once it has read the note. */
     processedAt: tsz("processed_at"),
@@ -253,6 +260,28 @@ export const fieldNotes = pgTable(
     seq: seq(),
   },
   (t) => [index("field_notes_seq_idx").on(t.seq), index("field_notes_person_idx").on(t.personId)],
+);
+
+/**
+ * "This person can no longer see this row": e.g. a task reassigned away from
+ * them. Pulled like any other change (seq > cursor); the client deletes the row.
+ * One row per (actor, entity, entity id); a repeat revocation bumps its seq.
+ */
+export const revocations = pgTable(
+  "revocations",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    actorId: uuid("actor_id")
+      .notNull()
+      .references(() => people.id),
+    entity: text("entity").$type<RevocableEntity>().notNull(),
+    entityId: uuid("entity_id").notNull(),
+    seq: seq(),
+  },
+  (t) => [
+    uniqueIndex("revocations_actor_entity_idx").on(t.actorId, t.entity, t.entityId),
+    index("revocations_seq_idx").on(t.seq),
+  ],
 );
 
 // ---------------------------------------------------------------------------
@@ -368,3 +397,4 @@ export type TimeEntry = typeof timeEntries.$inferSelect;
 export type StatusUpdate = typeof statusUpdates.$inferSelect;
 export type FieldNote = typeof fieldNotes.$inferSelect;
 export type EventRow = typeof events.$inferSelect;
+export type Revocation = typeof revocations.$inferSelect;

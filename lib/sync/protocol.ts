@@ -1,5 +1,6 @@
 // Wire format for POST /api/sync, shared by client and server.
 import { z } from "zod";
+import type { RevocableEntity } from "../domain";
 import type { FieldNote, Person, Rollout, Site, StatusUpdate, Task, TaskReceipt, TimeEntry } from "../db/schema";
 
 export const MAX_EVENTS_PER_SYNC = 200;
@@ -45,12 +46,18 @@ export const CHANGE_TABLES: ChangeTable[] = [
   "rollouts",
 ];
 
+/** "Drop this row from your device": you can no longer see it. */
+export type RevocationChange = { entity: RevocableEntity; entityId: string; seq: number };
+
 export type SyncResponse = {
   accepted: string[];
   duplicates: string[];
   rejected: { id: string; reason: string }[];
   changes: SyncChanges;
+  revocations: RevocationChange[];
   cursor: string;
+  /** The pull stopped at a page boundary: ask again from `cursor` for the rest. */
+  hasMore: boolean;
   /** Lets the client notice a badly wrong device clock. */
   serverTime: string;
 };

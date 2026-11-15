@@ -1,11 +1,13 @@
 // Orchestrates one event: load what the reducer needs from a store, run the
 // pure reducer, write the result. The store is Postgres on the server and
 // Dexie on the client, so both sides apply events with identical rules.
+import type { RevocableEntity } from "../domain";
 import type { SyncEvent } from "../events";
 import {
   reduceClockIn,
   reduceClockOut,
   reduceNoteCreated,
+  reduceNoteMediaUploaded,
   reduceReceipt,
   reduceStatusSet,
   reduceTaskCreated,
@@ -40,6 +42,8 @@ export interface SyncStore {
    * was assigned to them. Bump its seq so it reaches that person's next pull.
    */
   touchSite(siteId: string): Promise<void>;
+  /** `actorId` can no longer see this row; their next pull tells their device to drop it. */
+  revoke(actorId: string, entity: RevocableEntity, entityId: string): Promise<void>;
 }
 
 export type ApplyResult = { ok: true; changed: boolean } | { ok: false; reason: string };
@@ -99,6 +103,7 @@ export async function applyEvent(store: SyncStore, ev: SyncEvent, now: Date): Pr
             });
           }
         }
+        if (r.value.revokedFrom) await store.revoke(r.value.revokedFrom, "task", next.id);
         if (r.value.newRecipientId || r.value.changedFields.includes("siteId")) {
           await store.touchSite(next.siteId);
         }
@@ -164,7 +169,14 @@ export async function applyEvent(store: SyncStore, ev: SyncEvent, now: Date): Pr
         store.getSite(p.siteId),
         p.taskId ? store.getTask(p.taskId) : Promise.resolve(undefined),
       ]);
-      const r = reduceNoteCreated(existing, site, task, ev);
+      const r = reduceNoteCreated(existing, site, task, ev, actor);
+      if (!r.ok) return r;
+      if (r.changed) await store.putNote(r.value);
+      return { ok: true, changed: r.changed };
+    }
+
+    case "note.media_uploaded": {
+      const r = reduceNoteMediaUploaded(await store.getNote(ev.payload.noteId), ev);
       if (!r.ok) return r;
       if (r.changed) await store.putNote(r.value);
       return { ok: true, changed: r.changed };

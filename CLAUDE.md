@@ -53,35 +53,108 @@ instruction reached the worker (receipt chain: sent → delivered → seen → a
    every write. Client sends its cursor, gets visible rows with `seq > cursor` + new cursor.
    Writers take `pg_advisory_xact_lock` so seq order = commit order (no skipped rows).
    When a site newly becomes relevant to someone, `touchSite` bumps its (and its rollout's) seq.
-5. **Visibility by role.** technician/foreman: own tasks (assigned or created), receipts on them,
+   **Revocations:** when someone loses visibility of a row (a task reassigned away from a field
+   worker who did not create it), the reducer path writes `revocations(actor_id, entity, entity_id,
+   seq)`; the pull returns them (field roles only) and the client deletes the row + its receipts.
+   **Pagination:** each pull returns at most `PULL_PAGE_SIZE` (500) rows across all tables
+   (revocations included) plus `hasMore`; the client keeps pulling inside the same sync lock.
+5. **Write authorization** is in the reducers (so the client refuses locally with the same rules);
+   every refusal is reason `forbidden`. Coordinators/managers: anything on tasks. Everyone else:
+   receipts, status changes and notes only on tasks assigned to them; may edit only `description`
+   on their own tasks; may create tasks for themselves, or a `material_request`/`follow_up`
+   assigned to a coordinator. Clock in/out and status are always the actor's own.
+6. **Visibility by role.** technician/foreman: own tasks (assigned or created), receipts on them,
    own time entries/status/notes, sites they have tasks or time entries at, those sites' rollouts.
    coordinator/hr/manager: everything. People are a shared directory.
-6. **The field app reads ONLY from Dexie** (`useLiveQuery`). Writes go to the Dexie outbox and are
+7. **The field app reads ONLY from Dexie** (`useLiveQuery`). Writes go to the Dexie outbox and are
    applied optimistically to the cache. After each sync, server rows overwrite the cache and
    pending outbox events are re-applied on top (reducers are idempotent).
-7. **No Background Sync API** (iOS). Triggers: app start, `online`, `visibilitychange`→visible,
+8. **No Background Sync API** (iOS). Triggers: app start, `online`, `visibilitychange`→visible,
    every 30 s while open, manual "Sync now". Exponential backoff (2 s … 5 min, ±20% jitter);
    per-item `attempts` and `lastError`. Single-flight in-tab + Web Locks across tabs.
-8. **Events are one Zod discriminated union** in `lib/events.ts`, shared by client and server.
+   After each successful sync the **media upload queue** runs (`lib/sync/media.ts`, own lock).
+9. **Events are one Zod discriminated union** in `lib/events.ts`, shared by client and server.
 
 Location is captured only at clock-in and clock-out. No continuous tracking, ever.
+Dates for grouping and display use the **branch timezone** (`BRANCH_TIMEZONE`, America/New_York),
+never the device's. Weeks start Monday (calendar weeks/months, not rolling windows).
+
+## Events (lib/events.ts)
+
+`task.created`, `task.updated`, `task.status_changed`, `task.delivered`, `task.seen`,
+`task.acknowledged`, `time.clock_in`, `time.clock_out`, `status.set`, `note.created`,
+`note.media_uploaded` (Day 2).
+Day 2 payload changes: `note.created.mediaId` (local media id; blob uploaded later),
+`note.media_uploaded { noteId, blobUrl, mimeType, sizeBytes, durationSec? }` (first upload wins),
+`status.set.status` nullable (= clear status), `time.clock_in/out.locationError`
+(`denied|unavailable|timeout|unsupported`, feeds the HR flag reason).
+
+Receipts from the device: `task.delivered` once per device+person after a task first arrives from
+the server; `task.seen` the first time the detail opens; `task.acknowledged` from "Got it".
+"Once" is enforced by Dexie `receiptMarks` (survives cache rebuilds), not by the server.
+
+## Media
+
+Voice (MediaRecorder; mime picked with `isTypeSupported`, iOS gives audio/mp4; 2 min cap) and
+photos (file input `capture`, compressed to 1600 px JPEG) are stored as Blobs in Dexie `media`,
+written in the same transaction as their `note.created`. After the note syncs, the queue POSTs the
+blob to `/api/media` (Node runtime, server upload, 4 MB cap; checks the note belongs to the actor),
+which `put`s it to Vercel Blob at `notes/<noteId>/<mediaId>.<ext>` (public store, no random
+suffix, overwrite allowed, so retries land on the same URL). Then the client queues
+`note.media_uploaded`. Without `BLOB_READ_WRITE_TOKEN`, dev (and `pnpm start` with
+`SITESYNC_LOCAL_MEDIA=1`) stores files in `.data/media`, served by `/api/media/[name]`.
+
+## Dexie schema versioning
+
+`lib/db/local.ts` declares `this.version(n).stores({...})` for every version ever shipped.
+To change local tables:
+1. **Never edit a released version.** Add `this.version(n+1).stores({ changedTable: "..." })`
+   listing only tables that are new or whose indexes change (`null` deletes a table).
+   Dexie diffs schemas and leaves untouched tables (the outbox) as they are.
+2. If existing rows need reshaping, add `.upgrade(async (tx) => { ... })` and use
+   `tx.table(...)` only (never `localDb`), awaiting every write (`toArray` then `bulkPut`).
+   Never clear or rewrite `outbox` items' events: they are the user's unsynced work.
+3. If you add a cache table, add it to `cacheTables` (cleared on actor switch and full pulls);
+   queue-like tables (`outbox`, `media`, `receiptMarks`) must NOT be in `cacheTables`.
+4. Add a test like `tests/client-day2.test.ts` "Dexie schema upgrade": open a DB at the old
+   schema with plain `Dexie`, write outbox rows, open `new LocalDb(name)`, assert they survive.
+Other open tabs get a `versionchange`; Dexie closes them and the app shows the update banner.
+History: v1 (Day 1) outbox + caches + meta; v2 (Day 2) `media`, `receiptMarks` (backfilled from
+queued receipts).
+
+## Service worker updates
+
+`app/sw.ts` uses `skipWaiting: false`: a new worker waits. `components/update-banner.tsx` listens
+for Serwist's `waiting` event, shows "Update available, tap to reload", waits for any in-flight
+sync (`whenIdle`), sends `SKIP_WAITING` (`messageSkipWaiting`) and reloads on `controlling`.
+`reloadOnOnline` is off (it would cut voice recordings). Precache ignores `?id=`/`?taskId=`, so
+`/field/task?id=…` works offline for any task (hence not `/field/tasks/[id]`).
 
 ## Folder structure
 
 ```
 app/
   page.tsx               demo role picker
-  field/page.tsx         Day 1 task list (Today / This Week / This Month / Follow-ups)
+  field/layout.tsx       FieldChrome: sync bar (top) + bottom nav (Tasks, Clock, Notes, Me)
+  field/page.tsx         task list: Overdue/Today/This Week/This Month/Follow-ups, filters, My requests
+  field/task/page.tsx    task detail (?id=): auto seen, Got it, Start/Blocked/Done(+photo), receipts
+  field/clock/page.tsx   clock in/out: site, safety checklist, one-shot location, distance, hours
+  field/notes/page.tsx   text / voice / photo notes, upload state
+  field/me/page.tsx      optional worker status, last sync, Sync now
+  field/request/page.tsx material request (?taskId=) -> material_request task for the coordinator
   debug/page.tsx         sync console (outbox, cursor, simulate offline, test actions, reset)
   ~offline/page.tsx      service-worker fallback page
   api/sync/route.ts      POST /api/sync (Zod → processSync)
   api/people/route.ts    GET directory for the role picker
+  api/media/route.ts     POST media upload (-> Vercel Blob);  api/media/[name] dev fallback
   serwist/[path]/route.ts, sw.ts, manifest.ts, layout.tsx
-components/              sync-manager (triggers), sync-status, use-local hooks, ui/ (shadcn)
+components/              sync-manager (triggers + upload hook), update-banner, sync-status, use-local,
+                         field/ (chrome, ui primitives, task-card, photo-input, hooks), ui/ (shadcn)
 lib/
   domain.ts              enums, roles, status transitions (no deps)
   events.ts              Zod event union (shared)
-  geo.ts, time.ts, uuid.ts, config.ts
+  geo.ts (haversine, shared), time.ts (branch-tz days/weeks), geolocate.ts, uuid.ts, config.ts
+  media/                 recorder (MediaRecorder), compress (photos), store (Blob / dev fallback), types
   db/schema.ts           Drizzle schema (all tables, incl. later-day ones)
   db/server.ts           Neon Pool + Drizzle per request
   db/local.ts            Dexie schema: outbox, cache tables, meta
@@ -91,10 +164,12 @@ lib/
   sync/service.ts        processSync transaction
   sync/visibility.ts     role-scoped cursor pull
   sync/protocol.ts       request/response schema + types
-  sync/client.ts         enqueue / sync / setActor / simulate offline / reset
-  tasks/grouping.ts      Today / This Week / This Month / Follow-ups (rolling windows)
+  sync/client.ts         enqueue (once/media opts) / sync (paged) / markSeen / setActor / reset
+  sync/media.ts          saveNote + media upload queue
+  tasks/grouping.ts      Overdue / Today / This Week / This Month / Follow-ups (calendar, branch tz)
 db/  migrations/ (drizzle-kit), migrate.ts, seed.ts, seed-data.ts, connect.ts
-tests/  Vitest: sync (PGlite), reducers, client (fake-indexeddb + PGlite), grouping, seed
+tests/  Vitest: sync, day2 (authz, revocations, paging, media; PGlite), reducers, client,
+        client-day2, media (fake-indexeddb + PGlite), grouping, seed
 scripts/gen-icons.ts     placeholder PWA icons (no deps)
 ```
 
@@ -109,7 +184,9 @@ pnpm db:studio
 pnpm icons         # regenerate placeholder icons
 ```
 
-Secrets only in `.env.local` (gitignored). `.env.example` lists every key.
+Secrets only in `.env.local` (gitignored). `.env.example` lists every key:
+`DATABASE_URL`, `BLOB_READ_WRITE_TOKEN` (Day 2), `SITESYNC_LOCAL_MEDIA` (optional dev flag), and
+later-day keys.
 
 ## Conventions
 
@@ -124,7 +201,8 @@ Secrets only in `.env.local` (gitignored). `.env.example` lists every key.
 
 1. **Day 1 (done): foundation.** Schema, events, reducers, sync API, Dexie outbox/cache, PWA
    shell, role picker, `/field` list, `/debug`, seed, tests.
-2. **Day 2: field worker PWA.** Task groups UI, task detail (auto `task.seen`, Acknowledge button),
+2. **Day 2 (done): field worker PWA** + Day 1 fixes (revocations, paging, write authz, branch tz,
+   SW update prompt, Dexie v2). Task groups UI, task detail (auto `task.seen`, Acknowledge button),
    status changes, clock in/out with geolocation + site check + safety check, optional worker
    status, text/voice notes (blob upload when online), offline indicators.
 3. **Day 3: coordinator dashboard.** Live board (who is where, status), receipts view
@@ -136,9 +214,14 @@ Secrets only in `.env.local` (gitignored). `.env.example` lists every key.
    transcript → structured report/follow-ups), digest agent (`digests`), ops copilot.
 6. **Day 6: polish + demo.** Deploy to Vercel, demo script, airplane-mode walkthrough, hardening.
 
-## Known Day 1 limitations
+## Known gaps (after Day 2)
 
-- A task reassigned away from a technician stays in their local cache (no visibility
-  revocation/tombstones yet). Plan: tombstone rows or a per-actor "removed" list in the pull.
-- Pull is not paginated (fine for demo volumes).
-- Reseeding deletes rows; already-synced clients should Reset local data.
+- Revocations cover tasks only. Sites/rollouts a worker no longer has work at stay cached
+  (reference data, harmless). The old assignee keeps their own (frozen) receipt row on the server.
+- `note.media_uploaded.blobUrl` is trusted from the client (any URL passes Zod). Day 6 hardening:
+  check it is under our Blob store / matches `notes/<noteId>/`.
+- Blob store is public with unguessable paths (UUIDs); private Blob + signed reads is a later step.
+- Demo mode: no real auth. The API trusts `actorId`; authorization assumes the actor is honest.
+- Media stuck if its `note.created` is rejected by the server (blob stays on the device).
+- Reseeding deletes rows; already-synced clients should Reset local data (/debug).
+- Seeding over Neon is slow (one WebSocket round trip per statement, several minutes).

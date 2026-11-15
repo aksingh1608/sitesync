@@ -44,3 +44,27 @@ export function zonedTime(key: string, hh: number, mm: number, timeZone: string)
   }
   return new Date(guess);
 }
+
+/** ISO weekday of a day key: Monday = 1 ... Sunday = 7. */
+export function isoWeekday(key: string): number {
+  const d = keyToUtc(key).getUTCDay();
+  return d === 0 ? 7 : d;
+}
+
+/** The Sunday that ends the (Monday-first) week containing `key`. */
+export const endOfWeekKey = (key: string) => addDays(key, 7 - isoWeekday(key));
+
+/** The last day of the calendar month containing `key`. */
+export function endOfMonthKey(key: string): string {
+  const d = keyToUtc(key);
+  return utcToKey(new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)));
+}
+
+/** Format an instant as wall-clock time in the branch timezone. */
+export function formatInZone(
+  date: Date | string,
+  timeZone: string,
+  opts: Intl.DateTimeFormatOptions = { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" },
+): string {
+  return new Intl.DateTimeFormat("en-US", { timeZone, ...opts }).format(new Date(date));
+}

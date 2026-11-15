@@ -8,11 +8,12 @@ import { branches, people, rollouts, sites } from "../lib/db/schema";
 import type { SyncEventInput } from "../lib/events";
 import type { RolloutStage, TaskKind, TaskPriority, TaskStatus } from "../lib/domain";
 import { offsetNorth } from "../lib/geo";
-import { addDays, dayKey, zonedTime } from "../lib/time";
+import { addDays, dayKey, endOfMonthKey, endOfWeekKey, zonedTime } from "../lib/time";
 import { processSync } from "../lib/sync/service";
 import type { Db } from "../lib/sync/store-drizzle";
 
 const TZ = "America/New_York";
+const minKey = (a: string, b: string) => (a < b ? a : b);
 
 /** Fixed, valid UUID v4s: kind prefix + counter. */
 const uid = (kind: number, n: number) =>
@@ -77,8 +78,12 @@ type TaskSpec = {
   title: string;
   kind?: TaskKind;
   priority?: TaskPriority;
-  /** [days from today, hour, minute] in branch time, or null for no due date. */
-  due: [number, number, number] | null;
+  /**
+   * [day, hour, minute] in branch time, or null for no due date. `day` is days
+   * from today, or "week" (later this calendar week) / "month" (later this
+   * calendar month, after this week), so the demo looks right on any weekday.
+   */
+  due: [number | "week" | "month", number, number] | null;
   status?: Exclude<TaskStatus, "open">;
   receipt: ReceiptState;
   createdBy?: string;
@@ -96,38 +101,38 @@ const TASKS: TaskSpec[] = [
   { n: 4, assignee: P.sam, site: H, title: "Terminate branch circuits in OR suite 2", priority: "urgent", due: [0, 10, 0], receipt: "ack", createdDaysAgo: 2 },
   { n: 5, assignee: P.sam, site: S, title: "Service call: breaker tripping in stockroom", kind: "service_call", priority: "high", due: [0, 14, 0], receipt: "delivered", createdDaysAgo: 1 },
   { n: 6, assignee: P.sam, site: H, title: "Label panelboards L1-L4", due: [0, 16, 0], receipt: "sent", createdDaysAgo: 1 },
-  { n: 7, assignee: P.sam, site: H, title: "Install emergency lighting inverter, level 2", priority: "high", due: [2, 9, 0], receipt: "seen", createdDaysAgo: 3 },
+  { n: 7, assignee: P.sam, site: H, title: "Install emergency lighting inverter, level 2", priority: "high", due: ["week", 9, 0], receipt: "seen", createdDaysAgo: 3 },
   { n: 8, assignee: P.sam, site: H, title: "Rough-in inspection walkthrough with inspector", due: [5, 10, 30], receipt: "ack", createdDaysAgo: 5 },
-  { n: 9, assignee: P.sam, site: H, title: "Order 2-inch EMT and fittings for level 4", kind: "material_request", due: [12, 12, 0], receipt: "sent", createdDaysAgo: 1 },
+  { n: 9, assignee: P.sam, site: H, title: "Order 2-inch EMT and fittings for level 4", kind: "material_request", due: ["month", 12, 0], receipt: "sent", createdDaysAgo: 1 },
   { n: 10, assignee: P.sam, site: H, title: "Follow up: confirm transfer switch delivery date", kind: "follow_up", due: [1, 11, 0], receipt: "delivered", createdDaysAgo: 2 },
   { n: 11, assignee: P.sam, site: H, title: "Follow up: photograph as-built conduit routing", kind: "follow_up", priority: "low", due: [3, 15, 0], receipt: "ack", createdBy: P.sam, createdDaysAgo: 1 },
-  { n: 12, assignee: P.sam, site: H, title: "Fire alarm device rough-in, level 3", due: [20, 8, 0], receipt: "sent", createdDaysAgo: 1 },
+  { n: 12, assignee: P.sam, site: H, title: "Fire alarm device rough-in, level 3", due: ["month", 8, 0], receipt: "sent", createdDaysAgo: 1 },
 
   // Aisha Bello, technician (lighting): rollout stores.
   { n: 13, assignee: P.aisha, site: rolloutSite(4), title: "Punch list: replace 2 flickering troffers, Store #104", priority: "high", due: [-3, 16, 0], receipt: "ack", createdDaysAgo: 7 },
   { n: 14, assignee: P.aisha, site: rolloutSite(6), title: "LED retrofit install, aisles 1-6, Store #106", priority: "high", due: [0, 9, 0], status: "in_progress", receipt: "ack", createdDaysAgo: 3 },
   { n: 15, assignee: P.aisha, site: rolloutSite(6), title: "Photo documentation, Store #106", due: [0, 13, 0], receipt: "seen", createdDaysAgo: 3 },
   { n: 16, assignee: P.aisha, site: rolloutSite(6), title: "LED retrofit install, aisles 7-12, Store #106", due: [1, 9, 0], receipt: "delivered", createdDaysAgo: 3, parent: 14 },
-  { n: 17, assignee: P.aisha, site: rolloutSite(7), title: "Install occupancy sensors, Store #107", due: [3, 8, 0], receipt: "sent", createdDaysAgo: 1 },
-  { n: 18, assignee: P.aisha, site: rolloutSite(11), title: "Pre-install survey, Store #111", due: [10, 9, 0], receipt: "sent", createdDaysAgo: 1 },
+  { n: 17, assignee: P.aisha, site: rolloutSite(7), title: "Install occupancy sensors, Store #107", due: ["week", 8, 0], receipt: "sent", createdDaysAgo: 1 },
+  { n: 18, assignee: P.aisha, site: rolloutSite(11), title: "Pre-install survey, Store #111", due: ["month", 9, 0], receipt: "sent", createdDaysAgo: 1 },
   { n: 19, assignee: P.aisha, site: rolloutSite(6), title: "Follow up: return damaged fixture cartons", kind: "follow_up", priority: "low", due: [2, 12, 0], receipt: "seen", createdBy: P.aisha, createdDaysAgo: 1 },
   { n: 20, assignee: P.aisha, site: rolloutSite(3), title: "Closeout walk with store manager, Store #103", due: [-1, 10, 0], status: "done", receipt: "ack", createdDaysAgo: 5 },
 
   // Tom Reyes, technician (EV): Brooklyn retail service site.
   { n: 21, assignee: P.tom, site: S, title: "Service call: diagnose EV charger fault, rear lot", kind: "service_call", priority: "urgent", due: [0, 11, 0], receipt: "ack", createdDaysAgo: 1 },
-  { n: 22, assignee: P.tom, site: S, title: "Install two Level 2 EV chargers, rear lot", due: [4, 8, 0], receipt: "delivered", createdDaysAgo: 2 },
-  { n: 23, assignee: P.tom, site: S, title: "Load calculation for EV expansion", due: [15, 12, 0], receipt: "sent", createdDaysAgo: 1 },
+  { n: 22, assignee: P.tom, site: S, title: "Install two Level 2 EV chargers, rear lot", due: ["week", 8, 0], receipt: "delivered", createdDaysAgo: 2 },
+  { n: 23, assignee: P.tom, site: S, title: "Load calculation for EV expansion", due: ["month", 12, 0], receipt: "sent", createdDaysAgo: 1 },
   { n: 24, assignee: P.tom, site: S, title: "Replace exit sign batteries", priority: "low", due: [-4, 12, 0], status: "cancelled", receipt: "delivered", createdDaysAgo: 8 },
   { n: 25, assignee: P.tom, site: S, title: "Follow up: utility service upgrade application", kind: "follow_up", due: [6, 10, 0], status: "blocked", receipt: "seen", createdDaysAgo: 4 },
 
   // Luis Ortega, foreman (electrical): hospital.
   { n: 26, assignee: P.luis, site: H, title: "Daily huddle and manpower plan", due: [0, 7, 0], status: "done", receipt: "ack", createdDaysAgo: 1 },
   { n: 27, assignee: P.luis, site: H, title: "Coordinate ceiling close-up inspection", priority: "high", due: [1, 13, 0], receipt: "ack", createdBy: P.luis, createdDaysAgo: 2 },
-  { n: 28, assignee: P.luis, site: H, title: "Review switchgear submittals", due: [9, 10, 0], receipt: "seen", createdDaysAgo: 2 },
+  { n: 28, assignee: P.luis, site: H, title: "Review switchgear submittals", due: ["month", 10, 0], receipt: "seen", createdDaysAgo: 2 },
 
   // Grace Kim, foreman (lighting): rollout.
   { n: 29, assignee: P.grace, site: rolloutSite(5), title: "QA check, Store #105 install", due: [0, 12, 0], receipt: "ack", createdDaysAgo: 2 },
-  { n: 30, assignee: P.grace, site: rolloutSite(8), title: "Schedule crews for Stores #108-#110", due: [6, 9, 0], receipt: "delivered", createdDaysAgo: 2, createdBy: P.marcus },
+  { n: 30, assignee: P.grace, site: rolloutSite(8), title: "Schedule crews for Stores #108-#110", due: ["week", 9, 0], receipt: "delivered", createdDaysAgo: 2, createdBy: P.marcus },
   { n: 31, assignee: P.grace, site: rolloutSite(1), title: "Assemble closeout docs for completed stores", priority: "low", due: [25, 12, 0], receipt: "sent", createdDaysAgo: 1 },
 ];
 
@@ -141,7 +146,15 @@ export type SeedSummary = { tasks: number; events: number; people: number; sites
 export async function seed(db: Db, opts: { now?: Date } = {}): Promise<SeedSummary> {
   const now = opts.now ?? new Date();
   const today = dayKey(now, TZ);
-  const local = (days: number, hh: number, mm: number) => zonedTime(addDays(today, days), hh, mm, TZ);
+  const weekEnd = endOfWeekKey(today);
+  const monthEnd = endOfMonthKey(today);
+  /** Later this week (never past Sunday). On a Sunday there is no "later this week": use tomorrow. */
+  const laterThisWeek = today === weekEnd ? addDays(today, 1) : minKey(addDays(today, 2), weekEnd);
+  /** After this week but inside this month when possible; otherwise next month. */
+  const laterThisMonth = weekEnd >= monthEnd ? addDays(weekEnd, 3) : minKey(addDays(weekEnd, 3), monthEnd);
+  const dayFor = (d: number | "week" | "month") =>
+    d === "week" ? laterThisWeek : d === "month" ? laterThisMonth : addDays(today, d);
+  const local = (days: number | "week" | "month", hh: number, mm: number) => zonedTime(dayFor(days), hh, mm, TZ);
   /** Clamp so no seeded action is in the future. */
   const past = (d: Date) => new Date(Math.min(d.getTime(), now.getTime() - MIN));
 

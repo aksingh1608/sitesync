@@ -13,7 +13,7 @@ describe("seed", () => {
     const client = new PGlite();
     const db = drizzle({ client });
     await migrate(db, { migrationsFolder: "./db/migrations" });
-    const now = new Date("2026-11-15T16:00:00Z");
+    const now = new Date("2026-11-11T16:00:00Z"); // a Wednesday
 
     const first = await seed(db, { now });
     const second = await seed(db, { now }); // wipes and reseeds
@@ -34,9 +34,8 @@ describe("seed", () => {
     );
     expect(states).toEqual(new Set(["sent", "delivered", "seen", "ack"]));
 
-    const samTasks = await db.select().from(tasks).where(eq(tasks.assigneeId, SEED_IDS.people.sam));
-    const g = groupTasks(samTasks, now, BRANCH_TIMEZONE);
-    for (const k of ["today", "thisWeek", "thisMonth", "followUps", "closed"] as const) {
+    const g = await samGroups(db, now);
+    for (const k of ["overdue", "today", "thisWeek", "thisMonth", "followUps", "closed"] as const) {
       expect(g[k].length, k).toBeGreaterThan(0);
     }
     const [child] = await db.select().from(tasks).where(eq(tasks.id, SEED_TASK_ID(16)));
@@ -45,4 +44,57 @@ describe("seed", () => {
     expect(Number(n)).toBe(5);
     await client.close();
   });
+
+  it("computes every date relative to the moment it runs, with fixed ids", async () => {
+    const client = new PGlite();
+    const db = drizzle({ client });
+    await migrate(db, { migrationsFolder: "./db/migrations" });
+    const snapshot = async () => ({
+      tasks: await db.select().from(tasks).orderBy(tasks.id),
+      entries: await db.select().from(timeEntries).orderBy(timeEntries.id),
+      receipts: await db.select().from(taskReceipts).orderBy(taskReceipts.taskId),
+      events: (await db.select().from(events).orderBy(events.serverSeq)).map((e) => e.id),
+    });
+
+    const t1 = new Date("2026-11-11T16:00:00Z"); // Wednesday
+    const t2 = new Date(t1.getTime() + 7 * 86_400_000); // the Wednesday after
+    await seed(db, { now: t1 });
+    const a = await snapshot();
+    await seed(db, { now: t2 });
+    const b = await snapshot();
+
+    expect(b.tasks.map((t) => t.id)).toEqual(a.tasks.map((t) => t.id));
+    expect(b.entries.map((e) => e.id)).toEqual(a.entries.map((e) => e.id));
+    expect(b.events).toEqual(a.events);
+    const week = 7 * 86_400_000;
+    const shifted = (x: Date | null, y: Date | null) => (x && y ? y.getTime() - x.getTime() : null);
+    for (const [i, t] of a.tasks.entries()) {
+      if (t.dueAt) expect(shifted(t.dueAt, b.tasks[i].dueAt), t.title).toBe(week);
+      expect(shifted(t.createdAt, b.tasks[i].createdAt)).toBe(week);
+    }
+    for (const [i, e] of a.entries.entries()) expect(shifted(e.clockInAt, b.entries[i].clockInAt)).toBe(week);
+    for (const [i, r] of a.receipts.entries()) {
+      expect(shifted(r.sentAt, b.receipts[i].sentAt)).toBe(week);
+      if (r.acknowledgedAt) expect(shifted(r.acknowledgedAt, b.receipts[i].acknowledgedAt)).toBe(week);
+    }
+    // Nothing seeded is in the future.
+    expect(b.entries.every((e) => e.clockInAt <= t2 && (!e.clockOutAt || e.clockOutAt <= t2))).toBe(true);
+
+    // On a Sunday there is no "later this week", but every other group still has work.
+    await seed(db, { now: new Date("2026-11-15T16:00:00Z") });
+    const sunday = await samGroups(db, new Date("2026-11-15T16:00:00Z"));
+    for (const k of ["overdue", "today", "thisMonth", "followUps"] as const) expect(sunday[k].length, k).toBeGreaterThan(0);
+    // Near month end, "This Month" still gets the last day of the month.
+    const friday = new Date("2026-11-27T16:00:00Z");
+    await seed(db, { now: friday });
+    const monthEnd = await samGroups(db, friday);
+    expect(monthEnd.thisWeek.length).toBeGreaterThan(0);
+    expect(monthEnd.thisMonth.length).toBeGreaterThan(0);
+    await client.close();
+  });
 });
+
+async function samGroups(db: Parameters<typeof seed>[0], now: Date) {
+  const rows = await db.select().from(tasks).where(eq(tasks.assigneeId, SEED_IDS.people.sam));
+  return groupTasks(rows, now, BRANCH_TIMEZONE);
+}

@@ -114,6 +114,7 @@ async function runUploads(): Promise<UploadSummary> {
   const summary: UploadSummary = { uploaded: 0, failed: 0, waiting: 0 };
   if (!meta.actorId) return { ...summary, skipped: "no actor" };
   if (meta.simulateOffline) return { ...summary, skipped: "offline (simulated)" };
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return { ...summary, skipped: "offline" };
   const actorId = meta.actorId;
 
   const pending = (await localDb.media.where("[actorId+status]").equals([actorId, "pending"]).toArray()).sort(

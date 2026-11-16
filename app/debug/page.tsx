@@ -78,7 +78,7 @@ export default function DebugPage() {
     ]);
     const acked = new Set(receipts.filter((r) => r.acknowledgedAt).map((r) => r.taskId));
     const g = groupTasks(tasks, new Date(), BRANCH_TIMEZONE);
-    const target = [...g.overdue, ...g.today, ...g.thisWeek, ...g.thisMonth, ...g.followUps, ...g.later].find(
+    const target = [...g.overdue, ...g.today, ...g.next7, ...g.later, ...g.followUps].find(
       (t) => !acked.has(t.id),
     );
     if (!target) return "no unacknowledged task assigned to you";

@@ -1,7 +1,9 @@
 "use client";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useEffect, useState } from "react";
+import { formatClock, useMeta } from "@/components/use-local";
 import { localDb, type OutboxItem } from "@/lib/db/local";
+import { describeSync, type SyncView } from "@/lib/sync/status";
 
 export type PendingRefs = {
   tasks: Set<string>;
@@ -61,4 +63,13 @@ export function useOnline() {
     };
   }, []);
   return online;
+}
+
+/** The one view of sync state (top bar + Me page). */
+export function useSyncView(busy = false): SyncView {
+  const meta = useMeta();
+  const online = useOnline();
+  const pending = usePendingRefs(meta?.actorId);
+  const uploads = usePendingUploads(meta?.actorId);
+  return describeSync({ meta, online, pending: pending.count, uploads, formatClock: (iso) => formatClock(iso), busy });
 }

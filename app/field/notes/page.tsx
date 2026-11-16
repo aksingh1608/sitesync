@@ -13,6 +13,9 @@ import { localDb, type MediaItem } from "@/lib/db/local";
 import { MAX_VOICE_SECONDS } from "@/lib/domain";
 import { canRecordAudio, startRecording, type Recorder, type Recording } from "@/lib/media/recorder";
 import { saveNote } from "@/lib/sync/media";
+import { BRANCH_TIMEZONE } from "@/lib/config";
+import { defaultSiteId, rankSites } from "@/lib/field/sites";
+import { saveBlockedReason } from "@/lib/field/notes";
 import type { CachedFieldNote } from "@/lib/db/local";
 
 export default function NotesPage() {
@@ -40,19 +43,21 @@ function Notes() {
 
   const data = useLiveQuery(async () => {
     if (!actorId) return null;
-    const [task, sites, notes, media, entries] = await Promise.all([
+    const [task, sites, notes, media, entries, myTasks] = await Promise.all([
       taskId ? localDb.tasks.get(taskId) : Promise.resolve(undefined),
       localDb.sites.toArray(),
       localDb.fieldNotes.where("personId").equals(actorId).toArray(),
       localDb.media.toArray(),
       localDb.timeEntries.where("personId").equals(actorId).toArray(),
+      localDb.tasks.where("assigneeId").equals(actorId).toArray(),
     ]);
-    const clockedIn = entries.find((e) => e.clockOutAt === null)?.siteId;
+    const now = new Date();
     return {
       task,
-      sites: sites.sort((a, b) => a.name.localeCompare(b.name)),
+      // Same order and preselection as Clock (all from this device: works offline).
+      sites: rankSites(sites, myTasks, now, BRANCH_TIMEZONE),
       siteNames: new Map(sites.map((s) => [s.id, s.name])),
-      defaultSite: task?.siteId ?? clockedIn ?? sites[0]?.id ?? null,
+      defaultSite: defaultSiteId({ sites, myTasks, myEntries: entries, taskSiteId: task?.siteId, now, tz: BRANCH_TIMEZONE }),
       notes: notes.sort((a, b) => +b.createdAt - +a.createdAt),
       media: new Map(media.map((m) => [m.noteId, m])),
     };
@@ -60,7 +65,8 @@ function Notes() {
 
   if (!data) return <p>Loading…</p>;
   const site = siteId ?? data.defaultSite;
-  const ready = !!site && (kind === "text" ? !!text.trim() : kind === "voice" ? !!recording : !!photo);
+  const blocked = saveBlockedReason({ site, kind, text, hasRecording: !!recording, hasPhoto: !!photo, sitesAvailable: data.sites.length > 0 });
+  const ready = blocked === null;
 
   async function save() {
     if (!site || !ready) return;
@@ -96,7 +102,8 @@ function Notes() {
 
         {!data.task && (
           <Field label="Site">
-            <select className={inputClass} value={site ?? ""} onChange={(e) => setSiteId(e.target.value)}>
+            <select className={inputClass} value={site ?? ""} onChange={(e) => setSiteId(e.target.value || null)} data-testid="note-site">
+              {!site && <option value="">Pick a site…</option>}
               {data.sites.map((s) => (
                 <option key={s.id} value={s.id}>{s.name}</option>
               ))}
@@ -110,9 +117,14 @@ function Notes() {
         <Field label={kind === "text" ? "Note" : "Caption (optional)"}>
           <textarea className={inputClass} rows={kind === "text" ? 4 : 2} value={text} onChange={(e) => setText(e.target.value)} data-testid="note-text" />
         </Field>
-        <BigButton disabled={!ready} onClick={save} data-testid="save-note">
+        <BigButton disabled={!ready} onClick={save} data-testid="save-note" aria-describedby="save-why">
           Save note
         </BigButton>
+        {blocked && (
+          <p id="save-why" className="text-base font-semibold text-slate-800" data-testid="save-why">
+            {blocked}
+          </p>
+        )}
         {saved && <p className="font-semibold text-green-800">Saved on this device.</p>}
         {error && <p className="font-semibold text-red-700">{error}</p>}
       </Panel>

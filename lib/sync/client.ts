@@ -229,6 +229,11 @@ async function runSync(opts: { manual?: boolean }): Promise<LastSyncResult> {
     await setMeta({ lastSyncResult: result });
     return result;
   }
+  // The browser knows there is no network: don't wait 20 s for a fetch to time out.
+  // (Not stored as an error: no signal is normal in the field.)
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    return { status: "offline", at: nowIso(), simulated: false };
+  }
   if (!opts.manual && meta.nextRetryAt && Date.parse(meta.nextRetryAt) > Date.now()) {
     return skipped(`backing off until ${meta.nextRetryAt}`);
   }

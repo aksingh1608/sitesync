@@ -91,7 +91,8 @@ instruction reached the worker (receipt chain: sent → delivered → seen → a
 
 Location is captured only at clock-in and clock-out. No continuous tracking, ever.
 Dates for grouping and display use the **branch timezone** (`BRANCH_TIMEZONE`, America/New_York),
-never the device's. Weeks start Monday (calendar weeks/months, not rolling windows).
+never the device's. Task groups are **rolling windows** (Overdue / Today / Next 7 days / Later /
+Follow-ups); calendar weeks were dropped after the phone test (Sunday evening: "This Week" empty).
 
 ## Events (lib/events.ts)
 
@@ -167,7 +168,7 @@ sync (`whenIdle`), sends `SKIP_WAITING` (`messageSkipWaiting`) and reloads on `c
 app/
   page.tsx               demo role picker
   field/layout.tsx       FieldChrome: sync bar (top) + bottom nav (Tasks, Clock, Notes, Me)
-  field/page.tsx         task list: Overdue/Today/This Week/This Month/Follow-ups, filters, My requests
+  field/page.tsx         task list: Overdue/Today/Next 7 days/Later/Follow-ups, filters, My requests
   field/task/page.tsx    task detail (?id=): auto seen, Got it, Start/Blocked/Done(+photo), receipts
   field/clock/page.tsx   clock in/out: site, safety checklist, one-shot location, distance, hours
   field/notes/page.tsx   text / voice / photo notes, upload state
@@ -199,7 +200,9 @@ lib/
   sync/protocol.ts       request/response schema + types
   sync/client.ts         enqueue (once/media opts) / sync (paged) / markSeen / setActor / reset
   sync/media.ts          saveNote + media upload queue
-  tasks/grouping.ts      Overdue / Today / This Week / This Month / Follow-ups (calendar, branch tz)
+  field/                 sites.ts (site preselection, Clock + Notes), notes.ts (why Save is disabled)
+  sync/status.ts         describeSync: one sync view for top bar + Me (no signal is not an error)
+  tasks/grouping.ts      Overdue / Today / Next 7 days / Later / Follow-ups (rolling, branch tz)
 db/  migrations/ (drizzle-kit), migrate.ts, seed.ts, seed-data.ts, connect.ts
 tests/  Vitest: sync, day2 (authz, revocations, paging, media; PGlite), reducers, client,
         client-day2, media (fake-indexeddb + PGlite), grouping, seed

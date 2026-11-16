@@ -4,10 +4,9 @@ import { ClipboardList, Clock, Mic, User } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState, type ReactNode } from "react";
-import { formatClock, useMeta } from "@/components/use-local";
+import { useSyncView } from "./hooks";
 import { sync } from "@/lib/sync/client";
 import { cn } from "@/lib/utils";
-import { useOnline, usePendingRefs, usePendingUploads } from "./hooks";
 
 const NAV = [
   { href: "/field", label: "Tasks", icon: ClipboardList, match: (p: string) => p === "/field" || p.startsWith("/field/task") || p.startsWith("/field/request") },
@@ -51,35 +50,20 @@ export function FieldChrome({ children }: { children: ReactNode }) {
   );
 }
 
-/** Global sync indicator. Always visible; tap to sync now. */
+/** Global sync indicator. Always visible; tap to sync now. Same source as the Me page. */
 export function SyncBar() {
-  const meta = useMeta();
-  const online = useOnline();
-  const pending = usePendingRefs(meta?.actorId);
-  const uploads = usePendingUploads(meta?.actorId);
   const [busy, setBusy] = useState(false);
-  const offline = !online || !!meta?.simulateOffline;
-  const last = meta?.lastSyncResult;
-  const waiting = pending.count + uploads;
-
-  const tone = offline
-    ? "bg-slate-900 text-white"
-    : last?.status === "error"
-      ? "bg-red-700 text-white"
-      : waiting
-        ? "bg-amber-400 text-black"
-        : "bg-green-700 text-white";
-  const text = offline
-    ? meta?.simulateOffline
-      ? "Offline (simulated)"
-      : "Offline"
-    : busy
-      ? "Syncing…"
-      : last?.status === "error"
-        ? `Sync failed · retry ${formatClock(last.retryAt)}`
-        : meta?.lastSyncAt
-          ? `Synced ${formatClock(meta.lastSyncAt)}`
-          : "Not synced yet";
+  const v = useSyncView(busy);
+  const tone =
+    v.tone === "offline"
+      ? "bg-slate-900 text-white"
+      : v.tone === "error"
+        ? "bg-red-700 text-white"
+        : v.tone === "waiting"
+          ? "bg-amber-400 text-black"
+          : v.tone === "loading"
+            ? "bg-slate-200 text-slate-900"
+            : "bg-green-700 text-white";
 
   return (
     <button
@@ -95,14 +79,11 @@ export function SyncBar() {
       className={cn("sticky top-0 z-40 w-full pt-[env(safe-area-inset-top)]", tone)}
       data-testid="sync-bar"
       aria-live="polite"
+      aria-label={`${v.headline}. ${v.detail}`}
     >
       <span className="mx-auto flex min-h-12 max-w-xl items-center justify-between gap-2 px-4 text-base font-bold">
-        <span data-testid="net-status">{text}</span>
-        <span data-testid="pending-count">
-          {waiting
-            ? `${pending.count} waiting to sync${uploads ? ` · ${uploads} upload${uploads > 1 ? "s" : ""}` : ""}`
-            : "All saved"}
-        </span>
+        <span data-testid="net-status">{v.headline}</span>
+        <span data-testid="pending-count">{v.waiting}</span>
       </span>
     </button>
   );

@@ -35,7 +35,7 @@ describe("seed", () => {
     expect(states).toEqual(new Set(["sent", "delivered", "seen", "ack"]));
 
     const g = await samGroups(db, now);
-    for (const k of ["overdue", "today", "thisWeek", "thisMonth", "followUps", "closed"] as const) {
+    for (const k of ["overdue", "today", "next7", "later", "followUps", "closed"] as const) {
       expect(g[k].length, k).toBeGreaterThan(0);
     }
     const [child] = await db.select().from(tasks).where(eq(tasks.id, SEED_TASK_ID(16)));
@@ -80,16 +80,11 @@ describe("seed", () => {
     // Nothing seeded is in the future.
     expect(b.entries.every((e) => e.clockInAt <= t2 && (!e.clockOutAt || e.clockOutAt <= t2))).toBe(true);
 
-    // On a Sunday there is no "later this week", but every other group still has work.
-    await seed(db, { now: new Date("2026-11-15T16:00:00Z") });
-    const sunday = await samGroups(db, new Date("2026-11-15T16:00:00Z"));
-    for (const k of ["overdue", "today", "thisMonth", "followUps"] as const) expect(sunday[k].length, k).toBeGreaterThan(0);
-    // Near month end, "This Month" still gets the last day of the month.
-    const friday = new Date("2026-11-27T16:00:00Z");
-    await seed(db, { now: friday });
-    const monthEnd = await samGroups(db, friday);
-    expect(monthEnd.thisWeek.length).toBeGreaterThan(0);
-    expect(monthEnd.thisMonth.length).toBeGreaterThan(0);
+    // Rolling windows: every group has work whatever the weekday (Sunday included).
+    const sunday = new Date("2026-11-15T23:00:00Z");
+    await seed(db, { now: sunday });
+    const g = await samGroups(db, sunday);
+    for (const k of ["overdue", "today", "next7", "later", "followUps", "closed"] as const) expect(g[k].length, k).toBeGreaterThan(0);
     await client.close();
   });
 });

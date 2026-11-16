@@ -17,10 +17,9 @@ import { cn } from "@/lib/utils";
 const GROUPS: { key: GroupKey; label: string; alwaysShow?: boolean }[] = [
   { key: "overdue", label: "Overdue" },
   { key: "today", label: "Today", alwaysShow: true },
-  { key: "thisWeek", label: "This Week", alwaysShow: true },
-  { key: "thisMonth", label: "This Month", alwaysShow: true },
+  { key: "next7", label: "Next 7 days", alwaysShow: true },
+  { key: "later", label: "Later", alwaysShow: true },
   { key: "followUps", label: "Follow-ups", alwaysShow: true },
-  { key: "later", label: "Later / no date" },
   { key: "closed", label: "Done / cancelled" },
 ];
 

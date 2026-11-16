@@ -9,13 +9,13 @@ import { BigButton, PageTitle, Panel, WaitingMarker } from "@/components/field/u
 import { formatClock, useMeta } from "@/components/use-local";
 import { BRANCH_TIMEZONE } from "@/lib/config";
 import { localDb } from "@/lib/db/local";
-import { TERMINAL_STATUSES } from "@/lib/domain";
 import { getLocationOnce, LOCATION_ERROR_TEXT, type Fix, type NoFix } from "@/lib/geolocate";
 import { haversineM, isOutsideGeofence } from "@/lib/geo";
 import { enqueue, LocalRejectError } from "@/lib/sync/client";
 import type { SiteRow, TimeEntryRow } from "@/lib/sync/reducers";
 import { dayKey } from "@/lib/time";
 import { uuidv4 } from "@/lib/uuid";
+import { defaultSiteId, rankSites } from "@/lib/field/sites";
 import { cn } from "@/lib/utils";
 
 const CHECKS = [
@@ -71,16 +71,12 @@ export default function ClockPage() {
       localDb.sites.toArray(),
       localDb.tasks.where("assigneeId").equals(actorId).toArray(),
     ]);
-    const today = dayKey(new Date(), BRANCH_TIMEZONE);
-    const active = tasks.filter((t) => !TERMINAL_STATUSES.includes(t.status));
-    const todays = active.filter((t) => t.dueAt && dayKey(t.dueAt, BRANCH_TIMEZONE) <= today);
-    const suggested = todays[0]?.siteId ?? active[0]?.siteId ?? sites[0]?.id ?? null;
-    // Sites I have work at first.
-    const rank = (s: SiteRow) => (todays.some((t) => t.siteId === s.id) ? 0 : active.some((t) => t.siteId === s.id) ? 1 : 2);
+    const now = new Date();
+    const suggested = defaultSiteId({ sites, myTasks: tasks, myEntries: entries, now, tz: BRANCH_TIMEZONE });
     return {
       entries: entries.sort((a, b) => +b.clockInAt - +a.clockInAt),
       open: entries.find((e) => e.clockOutAt === null),
-      sites: sites.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name)),
+      sites: rankSites(sites, tasks, now, BRANCH_TIMEZONE), // sites I have work at first
       siteById: new Map(sites.map((s) => [s.id, s])),
       suggested,
     };

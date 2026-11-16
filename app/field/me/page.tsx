@@ -1,7 +1,7 @@
 "use client";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useState } from "react";
-import { usePendingRefs } from "@/components/field/hooks";
+import { usePendingRefs, useSyncView } from "@/components/field/hooks";
 import { BigButton, BigLink, PageTitle, Panel, WaitingMarker } from "@/components/field/ui";
 import { formatTime, useActor, useMeta } from "@/components/use-local";
 import { localDb } from "@/lib/db/local";
@@ -28,7 +28,7 @@ export default function MePage() {
     return rows.sort((a, b) => +b.at - +a.at)[0] ?? null;
   }, [actorId]);
   const status = current?.status ?? null;
-  const last = meta?.lastSyncResult;
+  const view = useSyncView();
 
   const set = (s: WorkerStatus | null) => enqueue({ type: "status.set", payload: { status: s } });
 
@@ -69,10 +69,19 @@ export default function MePage() {
 
       <Panel>
         <h2 className="text-xl font-bold">Sync</h2>
-        <p className="text-base">
-          Last sync: <strong>{meta?.lastSyncAt ? formatTime(meta.lastSyncAt) : "never"}</strong>
+        <p className="text-base" data-testid="me-last-sync">
+          Last sync:{" "}
+          <strong>{view.tone === "loading" ? "…" : (view.lastSyncAt ?? "not yet")}</strong>
         </p>
-        {last?.status === "error" && <p className="text-base font-semibold text-red-700">Last attempt failed: {last.error}</p>}
+        {view.tone === "offline" ? (
+          <p className="rounded-lg bg-slate-100 p-3 text-base font-semibold text-slate-900" data-testid="me-no-signal">
+            {view.detail}
+          </p>
+        ) : view.error ? (
+          <p className="text-base font-semibold text-red-700" data-testid="me-sync-error">
+            Last attempt failed: {view.error}
+          </p>
+        ) : null}
         <p className="text-base">{pending.count} change{pending.count === 1 ? "" : "s"} waiting to sync.</p>
         <BigButton
           disabled={busy}

@@ -6,7 +6,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import { APP_VERSION, OFFICE_POLL_MS } from "@/lib/config";
 import type { EventDraft } from "@/lib/events";
 import type { OfficeActor } from "@/lib/office/auth";
-import type { Snapshot } from "@/lib/office/queries";
+import type { OpenEscalation, Snapshot } from "@/lib/office/queries";
 import { uuidv4 } from "@/lib/uuid";
 
 /** JSON over the wire: Dates arrive as strings. */
@@ -17,7 +17,12 @@ export type Json<T> = T extends Date
     : T extends object
       ? { [K in keyof T]: Json<T[K]> }
       : T;
-export type Snap = Json<Snapshot> & { actor: OfficeActor };
+export type Snap = Json<Snapshot> & {
+  actor: OfficeActor;
+  /** Demo clock offset; `now` above is already on the demo clock. */
+  clock: { offsetMs: number };
+  escalations: Json<OpenEscalation>[];
+};
 
 export function usePolling<T>(url: string | null, ms = OFFICE_POLL_MS) {
   // Keyed by url, so switching views never shows the previous view's data.

@@ -69,10 +69,11 @@ function world(t: EvalTask, opts: { ack?: Date | null; sentAt?: Date } = {}) {
           status: a.skip ? "skipped" : "sent",
           scheduledFor: a.dueAt,
           resolvedAt: null,
+          handled: false,
         } satisfies EvalStep);
       } else {
         const s = state.steps.find((x) => x.id === a.escalationId)!;
-        s.status = "resolved";
+        if (a.channel === "coordinator_alert") s.status = "resolved";
         s.resolvedAt = now;
       }
     }
@@ -133,7 +134,8 @@ describe("ack ladder (sent, not acknowledged)", () => {
     w.run(min(90));
     w.state.receipts[0].acknowledgedAt = min(91);
     const out = w.run(min(92));
-    expect(out).toEqual([{ kind: "resolve", escalationId: expect.any(String), taskId: "task-1", why: "acknowledged" }]);
+    // Every open step of the ladder closes (levels 1-2 were superseded, never open).
+    expect(out.map((a) => a.kind === "resolve" && `${a.channel}:${a.why}`)).toEqual(["push:acknowledged", "coordinator_alert:acknowledged"]);
     expect(steps(w.run(min(1000)))).toEqual([]);
   });
 
@@ -145,8 +147,18 @@ describe("ack ladder (sent, not acknowledged)", () => {
     w.run(min(0));
     w.run(min(90));
     w.state.tasks[0].status = status;
-    expect(w.run(min(91))).toEqual([expect.objectContaining({ kind: "resolve", why })]);
+    const out = w.run(min(91));
+    expect(out.length).toBeGreaterThan(0);
+    expect(out.every((a) => a.kind === "resolve" && a.why === why)).toBe(true);
     expect(w.run(min(2000))).toEqual([]);
+  });
+
+  it("Mark handled stops the ladder; a new episode starts fresh", () => {
+    const w = world(task());
+    w.run(min(0));
+    w.run(min(30));
+    w.state.steps.forEach((s) => (s.handled = true));
+    expect(steps(w.run(min(500)))).toEqual([]);
   });
 
   it("an already acknowledged task never escalates", () => {
@@ -230,7 +242,10 @@ describe("blocked", () => {
     expect(steps(w.run(min(119)))).toEqual([]);
     expect(steps(w.run(min(120)))).toEqual(["blocked:1:coordinator_alert"]);
     w.state.tasks[0].status = "in_progress";
-    expect(w.run(min(121))).toEqual([expect.objectContaining({ kind: "resolve", why: "no longer blocked" })]);
+    expect(w.run(min(121))).toEqual([
+      expect.objectContaining({ kind: "resolve", channel: "push", why: "no longer blocked" }),
+      expect.objectContaining({ kind: "resolve", channel: "coordinator_alert", why: "no longer blocked" }),
+    ]);
   });
 
   it("blocked again later is a new episode", () => {

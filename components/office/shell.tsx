@@ -1,5 +1,5 @@
 "use client";
-import { BarChart3, CalendarClock, ClipboardList, LayoutGrid, Package, Store } from "lucide-react";
+import { BarChart3, CalendarClock, ClipboardList, LayoutGrid, MessageSquare, Package, Store } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import type { ReactNode } from "react";
@@ -8,6 +8,7 @@ import type { Role } from "@/lib/domain";
 import type { OfficeActor } from "@/lib/office/auth";
 import { cn } from "@/lib/utils";
 import { SnapshotProvider } from "./data";
+import { DemoClockBar } from "./escalations";
 import { capabilities } from "./ui";
 
 const NAV = [
@@ -16,6 +17,7 @@ const NAV = [
   { href: "/office/tasks/materials", label: "Material requests", icon: Package, show: (r: Role) => r !== "hr", sub: true },
   { href: "/office/rollouts", label: "Rollouts", icon: Store, show: (r: Role) => r !== "hr" },
   { href: "/office/timesheets", label: "Timesheets", icon: CalendarClock, show: () => true },
+  { href: "/office/sms", label: "SMS log", icon: MessageSquare, show: (r: Role) => r !== "hr" },
   { href: "/office/team", label: "Team", icon: BarChart3, show: () => true },
 ];
 
@@ -107,6 +109,7 @@ export function OfficeShell({
         <main className="min-w-0 flex-1 p-4">
           {actor ? (
             <SnapshotProvider key={actor.id} actorId={actor.id}>
+              <DemoClockBar />
               <RoleNote role={actor.role} />
               {children}
             </SnapshotProvider>

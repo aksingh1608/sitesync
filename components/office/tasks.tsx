@@ -9,6 +9,7 @@ import { fromZonedInput, toZonedInput } from "@/lib/time";
 import { uuidv4 } from "@/lib/uuid";
 import { cn } from "@/lib/utils";
 import { useSnapshot, usePolling, type Json, type Snap } from "./data";
+import { EscalationTimeline } from "./escalations";
 import {
   capabilities,
   Drawer,
@@ -39,10 +40,10 @@ export const VIEW_LABEL: Record<TaskView, string> = {
 type Filters = { site: string; assignee: string; status: string; priority: string; kind: string; stage: string };
 const NO_FILTERS: Filters = { site: "", assignee: "", status: "active", priority: "", kind: "", stage: "" };
 
-export function TaskTable({ view, onClearView }: { view: TaskView | null; onClearView: () => void }) {
+export function TaskTable({ view, onClearView, initialTaskId = null }: { view: TaskView | null; onClearView: () => void; initialTaskId?: string | null }) {
   const { data, send } = useSnapshot();
   const [f, setF] = useState<Filters>(NO_FILTERS);
-  const [openId, setOpenId] = useState<string | null>(null);
+  const [openId, setOpenId] = useState<string | null>(initialTaskId);
   const [creating, setCreating] = useState(false);
   const d = useMemo(() => (data ? derive(data) : null), [data]);
   if (!data || !d) return <p className="text-sm text-muted-foreground">Loading…</p>;
@@ -151,7 +152,7 @@ export function TaskTable({ view, onClearView }: { view: TaskView | null; onClea
           </tbody>
         </table>
       </div>
-      <p className="text-xs text-muted-foreground">{rows.length} task{rows.length === 1 ? "" : "s"}. Hover a receipt step for its time. Amber rows: sent over 30 minutes ago and not acknowledged (escalation comes on Day 4).</p>
+      <p className="text-xs text-muted-foreground">{rows.length} task{rows.length === 1 ? "" : "s"}. Hover a receipt step for its time. Amber rows: sent over 30 minutes ago and not acknowledged (each task&apos;s drawer shows its escalations).</p>
 
       <Drawer open={creating} onClose={() => setCreating(false)} title="New task">
         <TaskForm d={d} snap={data} onDone={() => setCreating(false)} send={send} />
@@ -373,6 +374,10 @@ function TaskPanel({ taskId, d, snap }: { taskId: string; d: D; snap: Snap }) {
         <dt className="text-muted-foreground">Created by</dt><dd>{d.person.get(t.createdBy)?.name} · {fmtDateTime(t.createdAt)}</dd>
         <dt className="text-muted-foreground">Due</dt><dd>{fmtDateTime(t.dueAt)}</dd>
         <dt className="text-muted-foreground">Receipt</dt><dd><ReceiptChain receipt={receipt} warn={snapTask ? d.ackLate(snapTask) : false} /></dd>
+        <dt className="text-muted-foreground">Receipt times</dt>
+        <dd className="text-xs text-muted-foreground" data-testid="receipt-times">
+          Sent {fmtDateTime(receipt?.sentAt)} · delivered {receipt?.deliveredAt ? fmtDateTime(receipt.deliveredAt) : "not yet"} · seen {receipt?.seenAt ? fmtDateTime(receipt.seenAt) : "not yet"} · acknowledged {receipt?.acknowledgedAt ? fmtDateTime(receipt.acknowledgedAt) : "not yet"}
+        </dd>
         {data.parent && (<><dt className="text-muted-foreground">Follow-up of</dt><dd>{data.parent.title}</dd></>)}
       </dl>
       {t.description && <p className="whitespace-pre-wrap rounded-md bg-muted/50 p-2">{t.description}</p>}
@@ -401,6 +406,11 @@ function TaskPanel({ taskId, d, snap }: { taskId: string; d: D; snap: Snap }) {
           <TaskForm d={d} snap={snap} task={{ ...snapTask, description: t.description }} send={send} />
         </section>
       )}
+
+      <section className="space-y-1">
+        <h3 className="font-semibold">Notifications and escalations</h3>
+        <EscalationTimeline rows={data.escalations} people={d.person} />
+      </section>
 
       <section className="space-y-2">
         <h3 className="font-semibold">Notes</h3>

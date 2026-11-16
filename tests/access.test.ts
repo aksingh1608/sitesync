@@ -63,6 +63,7 @@ describe("access gate (proxy)", () => {
       "/serwist/sw.js.map",
       "/~offline",
       "/api/unlock",
+      "/api/escalations/run",
       "/_next/static/chunks/app.js",
     ]) {
       expect(isPublicPath(path), path).toBe(true);
@@ -70,10 +71,13 @@ describe("access gate (proxy)", () => {
     }
     // ...and the matcher pre-filter skips them too (it must agree with isPublicPath).
     const re = new RegExp(`^${config.matcher[0]}$`);
-    for (const path of ["/manifest.webmanifest", "/icons/a.png", "/serwist/sw.js", "/~offline", "/api/unlock", "/_next/static/x.js"]) {
+    for (const path of ["/manifest.webmanifest", "/icons/a.png", "/serwist/sw.js", "/~offline", "/api/unlock", "/api/escalations/run", "/_next/static/x.js"]) {
       expect(re.test(path), path).toBe(false);
     }
-    for (const path of ["/", "/field", "/api/sync", "/api/media/x", "/debug"]) expect(re.test(path), path).toBe(true);
+    for (const path of ["/", "/field", "/api/sync", "/api/media/x", "/debug", "/api/escalations"]) {
+      expect(re.test(path), path).toBe(true);
+      if (path !== "/") expect(isPublicPath(path), path).toBe(false);
+    }
   });
 
   it("gates every precached app-shell route except the offline page, so precache can't store the gate", async () => {

@@ -6,6 +6,7 @@ import { useState } from "react";
 import { usePendingRefs, useNow } from "@/components/field/hooks";
 import { TaskCard } from "@/components/field/task-card";
 import { Chip, PageTitle } from "@/components/field/ui";
+import { NotificationsCard } from "@/components/push/field-card";
 import { useActor, useMeta } from "@/components/use-local";
 import { BRANCH_TIMEZONE } from "@/lib/config";
 import { localDb } from "@/lib/db/local";
@@ -75,6 +76,8 @@ export default function FieldPage() {
   return (
     <>
       <PageTitle sub={actor ? `${actor.name} · ${actor.role}` : "Loading…"}>My tasks</PageTitle>
+
+      <NotificationsCard compact />
 
       <div className="flex flex-wrap gap-2" role="group" aria-label="Filter tasks">
         {(Object.keys(FILTERS) as FilterKey[]).map((k) => (

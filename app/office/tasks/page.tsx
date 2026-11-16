@@ -25,5 +25,6 @@ function WithView() {
   const router = useRouter();
   const v = params.get("view");
   const view = TASK_VIEWS.includes(v as TaskView) ? (v as TaskView) : null;
-  return <TaskTable view={view} onClearView={() => router.replace("/office/tasks")} />;
+  const task = params.get("task");
+  return <TaskTable view={view} onClearView={() => router.replace("/office/tasks")} initialTaskId={task && /^[0-9a-f-]{36}$/i.test(task) ? task : null} />;
 }

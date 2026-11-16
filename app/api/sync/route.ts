@@ -1,4 +1,6 @@
+import { after } from "next/server";
 import { withDb } from "@/lib/db/server";
+import { runEscalationsSafe } from "@/lib/escalation/run";
 import { handleSync } from "@/lib/sync/http";
 import { processSync } from "@/lib/sync/service";
 
@@ -13,6 +15,15 @@ export async function POST(request: Request) {
   } catch {
     return Response.json({ error: "invalid_json" }, { status: 400, headers: { "cache-control": "no-store" } });
   }
+  let accepted = 0;
   // A fresh Pool per attempt, so a retry never reuses a broken connection.
-  return handleSync(body, (req) => withDb((db) => processSync(db, req, { recordDevice: true })));
+  const res = await handleSync(body, async (req) => {
+    const out = await withDb((db) => processSync(db, req, { recordDevice: true }));
+    if (out.ok) accepted = out.response.accepted.length;
+    return out;
+  });
+  // Escalation rules after the response (never slows or fails the sync). A sync
+  // that changed something runs them right away; an idle one is throttled.
+  after(() => runEscalationsSafe(withDb, { trigger: "sync", throttle: accepted === 0 }));
+  return res;
 }

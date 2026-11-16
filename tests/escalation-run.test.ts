@@ -101,7 +101,7 @@ describe("demo run: urgent task for an offline technician", () => {
     // Acknowledge: the alert resolves itself; further fast-forwards do nothing.
     await sync(db, ids.techA, [event({ type: "task.acknowledged", actorId: ids.techA, clientTs: new Date().toISOString(), payload: { taskId } } as never)]);
     const after = await run();
-    expect(after.resolved).toBe(1);
+    expect(after.resolved).toBe(4); // every open step closes; the alert becomes "resolved"
     const count = (await rows()).length;
     await moveClock(db, "+1h", ids.manager, REAL);
     await moveClock(db, "+1h", ids.manager, REAL);

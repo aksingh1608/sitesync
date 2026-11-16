@@ -3,6 +3,7 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { useState } from "react";
 import { usePendingRefs, useSyncView } from "@/components/field/hooks";
 import { BigButton, BigLink, PageTitle, Panel, WaitingMarker } from "@/components/field/ui";
+import { NotificationsCard } from "@/components/push/field-card";
 import { formatTime, useActor, useMeta } from "@/components/use-local";
 import { localDb } from "@/lib/db/local";
 import { WORKER_STATUSES, type WorkerStatus } from "@/lib/domain";
@@ -66,6 +67,8 @@ export default function MePage() {
           Clear status
         </BigButton>
       </Panel>
+
+      <NotificationsCard />
 
       <Panel>
         <h2 className="text-xl font-bold">Sync</h2>

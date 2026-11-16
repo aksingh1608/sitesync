@@ -3,9 +3,10 @@
 import { ClipboardList, Clock, Mic, User } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useSyncView } from "./hooks";
-import { sync } from "@/lib/sync/client";
+import { refreshPush } from "@/lib/push/client";
+import { ensureDeviceId, sync } from "@/lib/sync/client";
 import { cn } from "@/lib/utils";
 
 const NAV = [
@@ -17,6 +18,10 @@ const NAV = [
 
 export function FieldChrome({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  useEffect(() => {
+    // Keep the server's push subscription current (reseed, demo actor switch). Silent.
+    void ensureDeviceId().then((id) => refreshPush("field", id));
+  }, []);
   return (
     <div className="flex min-h-dvh flex-col bg-slate-100 text-slate-950">
       <SyncBar />

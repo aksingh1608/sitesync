@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo } from "react";
 import { UpdatedAgo, useSnapshot, type Snap } from "@/components/office/data";
+import { AlertsPanel } from "@/components/office/escalations";
 import { fmtTime, Kpi, PageHeader, Pill, WORKER_STATUS_LABEL } from "@/components/office/ui";
 import { derive } from "@/lib/office/derive";
 import { agoLabel, freshness } from "@/lib/office/rules";
@@ -47,6 +48,8 @@ function Board({ snap }: { snap: Snap }) {
         <Kpi label="Blocked" value={d.counts.blocked} href="/office/tasks?view=blocked" tone="red" testId="kpi-blocked" />
         <Kpi label="Open material requests" value={d.counts.materials} href="/office/tasks/materials" testId="kpi-materials" />
       </div>
+
+      <AlertsPanel snap={snap} />
 
       <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(19rem,1fr))]">
         {lanes.active.map(({ site, workers, open }) => (

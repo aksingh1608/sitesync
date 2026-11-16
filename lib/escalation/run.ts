@@ -44,10 +44,10 @@ export const shortCode = (taskId: string) => taskId.replace(/-/g, "").slice(-10)
 export const shortLink = (taskId: string, env?: NodeJS.ProcessEnv) => `${baseUrl(env)}/t/${shortCode(taskId)}`;
 
 export async function loadEscalationState(db: Db): Promise<EscalationState> {
-  const openAlertTasks = db
+  const openRowTasks = db
     .select({ id: escalations.taskId })
     .from(escalations)
-    .where(and(eq(escalations.channel, "coordinator_alert"), isNull(escalations.resolvedAt)));
+    .where(and(isNull(escalations.resolvedAt), inArray(escalations.status, ["sent", "failed"])));
   const tk = await db
     .select({
       id: tasks.id,
@@ -63,7 +63,7 @@ export async function loadEscalationState(db: Db): Promise<EscalationState> {
       fieldTs: tasks.fieldTs,
     })
     .from(tasks)
-    .where(or(notInArray(tasks.status, [...TERMINAL_STATUSES]), inArray(tasks.id, openAlertTasks)));
+    .where(or(notInArray(tasks.status, [...TERMINAL_STATUSES]), inArray(tasks.id, openRowTasks)));
   const ids = tk.map((t) => t.id);
   const [rc, ppl, st, steps] = await Promise.all([
     ids.length
@@ -86,12 +86,19 @@ export async function loadEscalationState(db: Db): Promise<EscalationState> {
             status: escalations.status,
             scheduledFor: escalations.scheduledFor,
             resolvedAt: escalations.resolvedAt,
+            handledBy: escalations.handledBy,
           })
           .from(escalations)
           .where(inArray(escalations.taskId, ids))
       : [],
   ]);
-  return { tasks: tk, receipts: rc, people: ppl, sites: st, steps };
+  return {
+    tasks: tk,
+    receipts: rc,
+    people: ppl,
+    sites: st,
+    steps: steps.map(({ handledBy, ...s }) => ({ ...s, handled: handledBy !== null })),
+  };
 }
 
 /**
@@ -125,7 +132,7 @@ export async function runEscalations(
       const done = await db
         .update(escalations)
         .set({
-          status: "resolved",
+          ...(a.channel === "coordinator_alert" ? { status: "resolved" as const } : {}),
           resolvedAt: clock.now,
           detail: sql`coalesce(${escalations.detail}, '{}'::jsonb) || ${JSON.stringify({ resolvedBy: "auto", why: a.why })}::jsonb`,
         })

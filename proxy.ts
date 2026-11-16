@@ -28,5 +28,5 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   // Cheap pre-filter; proxy() re-checks with isPublicPath(), which is unit tested.
-  matcher: ["/((?!_next/static|_next/image|icons/|serwist/|manifest\\.webmanifest|favicon\\.ico|~offline|api/unlock).*)"],
+  matcher: ["/((?!_next/static|_next/image|icons/|serwist/|manifest\\.webmanifest|favicon\\.ico|~offline|api/unlock|api/escalations/run).*)"],
 };

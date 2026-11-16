@@ -48,9 +48,11 @@ export type EvalStep = {
   status: EscalationStatus;
   scheduledFor: Date;
   resolvedAt: Date | null;
+  /** A person pressed "Mark handled": this ladder (rule + episode) stops. */
+  handled: boolean;
 };
 export type EscalationState = {
-  /** Open tasks, plus closed ones that still have an open coordinator alert. */
+  /** Open tasks, plus closed ones that still have open escalation rows. */
   tasks: EvalTask[];
   receipts: EvalReceipt[];
   people: EvalPerson[];
@@ -85,7 +87,8 @@ export type StepAction = {
   /** Push urgency hint. */
   urgent: boolean;
 };
-export type ResolveAction = { kind: "resolve"; escalationId: string; taskId: string; why: string };
+/** Close an open row whose cause is gone. Coordinator alerts also change status to `resolved`. */
+export type ResolveAction = { kind: "resolve"; escalationId: string; taskId: string; channel: EscalationChannel; why: string };
 export type EscalationAction = StepAction | ResolveAction;
 
 // ---------------------------------------------------------------------------
@@ -177,6 +180,8 @@ export function evaluateEscalations(
       episode: string,
       due: { level: number; at: Date; make: () => Omit<StepAction, "kind" | "taskId" | "urgent" | "rule" | "episode" | "level" | "dueAt" | "skip"> }[],
     ) => {
+      // "Mark handled" by a coordinator stops this ladder.
+      if (steps.some((s) => s.rule === rule && s.episode === episode && s.handled)) return;
       const ready = due.filter((d) => d.at.getTime() <= now.getTime() && !find(rule, episode, d.level));
       const top = Math.max(...ready.map((d) => d.level));
       for (const d of ready) {
@@ -210,7 +215,7 @@ export function evaluateEscalations(
         // Office assignees (material requests) get the first push only: they have no "Got it".
         const anchor = l0.scheduledFor;
         const m = policy.ackLadderMin;
-        const word = PRIORITY_WORD[t.priority] || "Task";
+        const word = PRIORITY_WORD[t.priority] ? `${PRIORITY_WORD[t.priority]} task` : "Task";
         ladder("ack", ack.episode, [
           {
             level: 1,
@@ -231,7 +236,8 @@ export function evaluateEscalations(
               personId: t.assigneeId,
               pushTo: [],
               reason: `Not acknowledged after ${m[2] * factor} min: SMS`,
-              message: { title: "SMS", body: `SiteSync: ${word} not acknowledged: ${t.title} at ${site}.${dueText}` },
+              // Short (one 160-char segment where possible): no due time, the link opens the task.
+              message: { title: "SMS", body: `SiteSync: ${word} not acknowledged: ${t.title} at ${site}.` },
             }),
           },
           {
@@ -351,18 +357,19 @@ export function evaluateEscalations(
       });
     }
 
-    // --- 5. Open coordinator alerts whose cause is gone resolve themselves.
+    // --- 5. Open escalation rows whose cause is gone close themselves
+    // (acknowledged, done, cancelled, unblocked, new due date, reassigned).
     for (const s of steps) {
-      if (s.channel !== "coordinator_alert" || s.resolvedAt || s.status === "skipped" || s.status === "pending") continue;
-      const why = alertGone(s, t, ack?.episode ?? null, now);
-      if (why) actions.push({ kind: "resolve", escalationId: s.id, taskId: t.id, why });
+      if (s.resolvedAt || s.rule === "changed" || s.status === "skipped" || s.status === "pending") continue;
+      const why = causeGone(s, t, ack?.episode ?? null, now);
+      if (why) actions.push({ kind: "resolve", escalationId: s.id, taskId: t.id, channel: s.channel, why });
     }
   }
   return actions;
 }
 
-/** Why an open alert no longer applies (null: it still does). */
-function alertGone(s: EvalStep, t: EvalTask, currentAckEpisode: string | null, now: Date): string | null {
+/** Why an open escalation no longer applies (null: it still does). */
+function causeGone(s: EvalStep, t: EvalTask, currentAckEpisode: string | null, now: Date): string | null {
   if (t.status === "done") return "task done";
   if (t.status === "cancelled") return "task cancelled";
   if (s.rule === "ack" && s.episode !== currentAckEpisode) {

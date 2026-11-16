@@ -2,7 +2,20 @@
 // Writes never happen here: the dashboard posts events to /api/sync like a phone.
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import { BRANCH_TIMEZONE } from "../config";
-import { devices, events, fieldNotes, people, rollouts, sites, statusUpdates, taskReceipts, tasks, timeEntries } from "../db/schema";
+import {
+  devices,
+  escalations,
+  events,
+  fieldNotes,
+  people,
+  rollouts,
+  sites,
+  smsMessages,
+  statusUpdates,
+  taskReceipts,
+  tasks,
+  timeEntries,
+} from "../db/schema";
 import type { Db } from "../sync/store-drizzle";
 import { mediaUrlFor } from "../sync/visibility";
 import { addDays, zonedTime } from "../time";
@@ -59,15 +72,54 @@ export async function loadSnapshot(db: Db, now: Date) {
 }
 export type Snapshot = Awaited<ReturnType<typeof loadSnapshot>>;
 
+/**
+ * Open escalations for the board's alerts panel: sent (or failed) and not yet
+ * handled or closed by their cause going away. Leaves out plain notifications
+ * (the first "new task" push, "changed" pushes).
+ */
+export async function loadOpenEscalations(db: Db) {
+  const rows = await db
+    .select({
+      id: escalations.id,
+      taskId: escalations.taskId,
+      personId: escalations.personId,
+      rule: escalations.rule,
+      level: escalations.level,
+      channel: escalations.channel,
+      status: escalations.status,
+      reason: escalations.reason,
+      sentAt: escalations.sentAt,
+      error: escalations.error,
+    })
+    .from(escalations)
+    .where(
+      and(
+        isNull(escalations.resolvedAt),
+        inArray(escalations.status, ["sent", "failed"]),
+        sql`${escalations.rule} <> 'changed'`,
+        sql`not (${escalations.rule} = 'ack' and ${escalations.level} = 0)`,
+      ),
+    )
+    .orderBy(desc(escalations.sentAt));
+  return rows;
+}
+export type OpenEscalation = Awaited<ReturnType<typeof loadOpenEscalations>>[number];
+
 /** Everything about one task: history (who did what, when, from which device), notes, follow-ups. */
 export async function loadTaskDetail(db: Db, taskId: string) {
   const [task] = await db.select().from(tasks).where(eq(tasks.id, taskId));
   if (!task) return null;
-  const [receipts, notes, followUps, parent] = await Promise.all([
+  const [receipts, notes, followUps, parent, escalationRows, sms] = await Promise.all([
     db.select().from(taskReceipts).where(eq(taskReceipts.taskId, taskId)),
     db.select().from(fieldNotes).where(eq(fieldNotes.taskId, taskId)).orderBy(asc(fieldNotes.createdAt)),
     db.select().from(tasks).where(eq(tasks.parentTaskId, taskId)).orderBy(asc(tasks.createdAt)),
     task.parentTaskId ? db.select().from(tasks).where(eq(tasks.id, task.parentTaskId)) : Promise.resolve([]),
+    db.select().from(escalations).where(eq(escalations.taskId, taskId)).orderBy(asc(escalations.createdAt), asc(escalations.level)),
+    db
+      .select({ id: smsMessages.id, escalationId: smsMessages.escalationId, provider: smsMessages.provider, status: smsMessages.status, toMasked: smsMessages.toMasked })
+      .from(smsMessages)
+      .innerJoin(escalations, eq(escalations.id, smsMessages.escalationId))
+      .where(eq(escalations.taskId, taskId)),
   ]);
   const noteIds = notes.map((n) => n.id);
   const history = await db
@@ -98,6 +150,7 @@ export async function loadTaskDetail(db: Db, taskId: string) {
     notes: notes.map(({ blobPath, ...n }) => ({ ...strip(n), blobPath: null, mediaUrl: mediaUrlFor(n.id, blobPath) })),
     followUps: followUps.map((t) => ({ id: t.id, title: t.title, status: t.status, assigneeId: t.assigneeId, kind: t.kind })),
     parent: parent[0] ? { id: parent[0].id, title: parent[0].title } : null,
+    escalations: escalationRows.map(({ seq: _s, ...e }) => (void _s, { ...e, sms: sms.find((m) => m.escalationId === e.id) ?? null })),
     history,
   };
 }

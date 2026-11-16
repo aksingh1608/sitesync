@@ -12,8 +12,12 @@ export const ACCESS_COOKIE = "sitesync_access";
 /** Browsers cap cookie lifetime at ~400 days. */
 export const ACCESS_COOKIE_MAX_AGE = 400 * 24 * 60 * 60;
 
-/** Paths that never need the code: install/offline plumbing and the unlock endpoint. */
-const PUBLIC_EXACT = new Set(["/manifest.webmanifest", "/~offline", "/favicon.ico", "/api/unlock"]);
+/**
+ * Paths that never need the code: install/offline plumbing, the unlock
+ * endpoint, and the escalation runner (Vercel Cron has no cookie; the route
+ * itself requires `Authorization: Bearer CRON_SECRET`).
+ */
+const PUBLIC_EXACT = new Set(["/manifest.webmanifest", "/~offline", "/favicon.ico", "/api/unlock", "/api/escalations/run"]);
 const PUBLIC_PREFIX = ["/icons/", "/serwist/", "/_next/static/", "/_next/image"];
 
 export function isPublicPath(pathname: string): boolean {

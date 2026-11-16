@@ -1,24 +1,34 @@
 // Media upload queue. Voice notes and photos are stored as Blobs in Dexie
 // (`media`) while offline; `note.created` references the local media id.
-// When online, each blob is uploaded (POST /api/media -> Vercel Blob), then
-// `note.media_uploaded` is queued like any other event. Retries use the same
-// backoff as the outbox. Single-flight in-tab + a Web Lock across tabs.
+// When online, each blob is uploaded (POST /api/media -> private Vercel Blob);
+// the SERVER records `note.media_uploaded` with the pathname it chose, so the
+// device never reports a URL. The next pull brings `mediaUrl` (an
+// authenticated route). The local blob is kept so this device can play its own
+// media offline. Retries use the outbox backoff. Single-flight + a Web Lock.
 import { getMeta, localDb, type MediaItem } from "../db/local";
 import type { NoteKind } from "../domain";
 import { uuidv4 } from "../uuid";
 import { backoffMs, enqueue, sync } from "./client";
 
-export type UploadInput = { file: Blob; mediaId: string; noteId: string; actorId: string; mimeType: string };
-export type UploadTransport = (input: UploadInput) => Promise<{ url: string }>;
+export type UploadInput = {
+  file: Blob;
+  mediaId: string;
+  noteId: string;
+  actorId: string;
+  mimeType: string;
+  durationSec: number | null;
+};
+export type UploadTransport = (input: UploadInput) => Promise<{ ok: true; mediaUrl: string | null }>;
 
 const UPLOAD_TIMEOUT_MS = 90_000;
 
-const httpUpload: UploadTransport = async ({ file, mediaId, noteId, actorId, mimeType }) => {
+const httpUpload: UploadTransport = async ({ file, mediaId, noteId, actorId, mimeType, durationSec }) => {
   const form = new FormData();
   form.append("file", new Blob([file], { type: mimeType }), mediaId);
   form.append("mediaId", mediaId);
   form.append("noteId", noteId);
   form.append("actorId", actorId);
+  if (durationSec !== null) form.append("durationSec", String(durationSec));
   const res = await fetch("/api/media", {
     method: "POST",
     body: form,
@@ -26,7 +36,7 @@ const httpUpload: UploadTransport = async ({ file, mediaId, noteId, actorId, mim
     cache: "no-store",
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text().catch(() => "")).slice(0, 200)}`);
-  return (await res.json()) as { url: string };
+  return (await res.json()) as { ok: true; mediaUrl: string | null };
 };
 
 let transport: UploadTransport = httpUpload;
@@ -58,7 +68,6 @@ export async function saveNote(input: {
           attempts: 0,
           lastError: null,
           nextAttemptAt: null,
-          blobUrl: null,
           createdAt: new Date(),
         }
       : undefined;
@@ -106,14 +115,6 @@ async function runUploads(): Promise<UploadSummary> {
   if (meta.simulateOffline) return { ...summary, skipped: "offline (simulated)" };
   const actorId = meta.actorId;
 
-  // Free space: once the server copy of the note has its URL, drop the local blob.
-  const done = await localDb.media.where("[actorId+status]").equals([actorId, "uploaded"]).toArray();
-  for (const m of done) {
-    if (!m.blob) continue;
-    const note = await localDb.fieldNotes.get(m.noteId);
-    if (note?.seq !== undefined && note.blobUrl) await localDb.media.update(m.id, { blob: null });
-  }
-
   const pending = (await localDb.media.where("[actorId+status]").equals([actorId, "pending"]).toArray()).sort(
     (a, b) => a.createdAt.getTime() - b.createdAt.getTime(),
   );
@@ -124,28 +125,15 @@ async function runUploads(): Promise<UploadSummary> {
       summary.waiting++;
       continue;
     }
-    if (note.blobUrl) {
-      await localDb.media.update(m.id, { status: "uploaded", blobUrl: note.blobUrl });
+    if (note.mediaUrl) {
+      await localDb.media.update(m.id, { status: "uploaded" }); // another tab/run already did it
       continue;
     }
     try {
-      const { url } = await transport({ file: m.blob, mediaId: m.id, noteId: m.noteId, actorId, mimeType: m.mimeType });
-      // If we crash between these two writes the blob is uploaded again to the
-      // same path, and the second event is a no-op on the server (first URL wins).
-      await enqueue(
-        {
-          type: "note.media_uploaded",
-          payload: {
-            noteId: m.noteId,
-            blobUrl: url,
-            mimeType: m.mimeType,
-            sizeBytes: m.sizeBytes,
-            ...(m.durationSec !== null ? { durationSec: m.durationSec } : {}),
-          },
-        },
-        { autoSync: false },
-      );
-      await localDb.media.update(m.id, { status: "uploaded", blobUrl: url, lastError: null });
+      // The server stores the blob AND records note.media_uploaded. A retry after
+      // a lost response overwrites the same path and is a duplicate event.
+      await transport({ file: m.blob, mediaId: m.id, noteId: m.noteId, actorId, mimeType: m.mimeType, durationSec: m.durationSec });
+      await localDb.media.update(m.id, { status: "uploaded", lastError: null });
       summary.uploaded++;
     } catch (err) {
       const attempts = m.attempts + 1;
@@ -157,6 +145,7 @@ async function runUploads(): Promise<UploadSummary> {
       summary.failed++;
     }
   }
+  // Pull the note rows that now carry mediaUrl.
   if (summary.uploaded > 0) void sync().catch(() => {});
   return summary;
 }

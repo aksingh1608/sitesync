@@ -29,11 +29,14 @@ export type SyncChanges = {
   task_receipts: TaskReceipt[];
   time_entries: TimeEntry[];
   status_updates: StatusUpdate[];
-  field_notes: FieldNote[];
+  /** `blobPath` is always null on the wire; `mediaUrl` is the authenticated route. */
+  field_notes: PulledFieldNote[];
   sites: Site[];
   people: Person[];
   rollouts: Rollout[];
 };
+export type PulledFieldNote = FieldNote & { mediaUrl: string | null };
+
 export type ChangeTable = keyof SyncChanges;
 export const CHANGE_TABLES: ChangeTable[] = [
   "tasks",

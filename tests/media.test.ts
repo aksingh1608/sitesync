@@ -7,6 +7,8 @@ import { events, fieldNotes } from "@/lib/db/schema";
 import { localDb, setMeta } from "@/lib/db/local";
 import { setActor, setAfterSync, setTransport, sync } from "@/lib/sync/client";
 import { saveNote, setUploadTransport, uploadPending, type UploadInput } from "@/lib/sync/media";
+import { mediaPathFor } from "@/lib/events";
+import { checkUploadAllowed, recordMediaUpload } from "@/lib/media/record";
 import { processSync } from "@/lib/sync/service";
 import type { Db } from "@/lib/sync/store-drizzle";
 import type { WireSyncResponse } from "@/lib/sync/protocol";
@@ -16,20 +18,34 @@ let db: Db;
 let close: () => Promise<void>;
 let uploads: UploadInput[] = [];
 let uploadFails = 0;
+let loseResponse = 0;
 
 beforeEach(async () => {
   ({ db, close } = await makeDb());
   uploads = [];
   uploadFails = 0;
+  loseResponse = 0;
   setTransport(async (req) => {
     const out = await processSync(db, JSON.parse(JSON.stringify(req)));
     if (!out.ok) throw new Error(out.error);
     return JSON.parse(JSON.stringify(out.response)) as WireSyncResponse;
   });
+  // Stand-in for POST /api/media: the same server functions, storage skipped.
   setUploadTransport(async (input) => {
     uploads.push(input);
     if (uploadFails-- > 0) throw new Error("upload failed");
-    return { url: `https://blob.example.com/notes/${input.noteId}/${input.mediaId}.m4a` };
+    const check = await checkUploadAllowed(db, input);
+    if (!check.ok) throw new Error(check.error);
+    const blobPath = mediaPathFor(input.noteId, input.mediaId, "m4a");
+    const r = await recordMediaUpload(db, {
+      ...input,
+      blobPath,
+      sizeBytes: input.file.size,
+      durationSec: input.durationSec ?? undefined,
+    });
+    if (!r.ok) throw new Error(r.error);
+    if (loseResponse-- > 0) throw new Error("response lost"); // stored + recorded, but the device never heard
+    return { ok: true, mediaUrl: `/api/media/${input.noteId}` };
   });
   setAfterSync(null);
   await localDb.delete({ disableAutoOpen: false });
@@ -77,24 +93,35 @@ describe("media upload queue", () => {
     expect(failed!.nextAttemptAt!.getTime()).toBeGreaterThan(Date.now());
     expect(await uploadPending()).toMatchObject({ waiting: 1 });
 
+    // Next attempt: the server stores + records it, but the response is lost.
     await localDb.media.update(m.id, { nextAttemptAt: new Date(0) }); // time passes
+    loseResponse = 1;
+    expect(await uploadPending()).toMatchObject({ failed: 1 });
+    // The retry is a duplicate on the server, not a second event.
+    await localDb.media.update(m.id, { nextAttemptAt: new Date(0) });
     expect(await uploadPending()).toMatchObject({ uploaded: 1 });
     await sync({ manual: true });
 
     const [server] = await db.select().from(fieldNotes).where(eq(fieldNotes.id, noteId));
-    expect(server.blobUrl).toBe(`https://blob.example.com/notes/${noteId}/${m.id}.m4a`);
+    expect(server.blobPath).toBe(`notes/${noteId}/${m.id}.m4a`);
     expect(server).toMatchObject({ mimeType: "audio/mp4", sizeBytes: 2048, durationSec: 4.2, kind: "voice" });
-    expect((await localDb.fieldNotes.get(noteId))?.blobUrl).toBe(server.blobUrl);
+    // The device gets the authenticated route, never the pathname or a blob URL.
+    const local = await localDb.fieldNotes.get(noteId);
+    expect(local?.mediaUrl).toBe(`/api/media/${noteId}`);
+    expect(local?.blobPath).toBeNull();
     expect(await localDb.outbox.count()).toBe(0);
 
     const types = (await db.select({ type: events.type }).from(events).where(eq(events.actorId, ids.techA))).map((e) => e.type);
     expect(types.filter((t) => t === "note.created")).toHaveLength(1);
     expect(types.filter((t) => t === "note.media_uploaded")).toHaveLength(1);
+    expect(uploads).toHaveLength(3);
 
-    // Next pass drops the local blob now the server has the URL; nothing re-uploads.
+    // The recording device keeps its own copy for offline playback; nothing re-uploads.
     await uploadPending();
-    expect((await localDb.media.get(m.id))?.blob).toBeNull();
-    expect(uploads).toHaveLength(2);
+    const kept = await localDb.media.get(m.id);
+    expect(kept?.status).toBe("uploaded");
+    expect(kept?.blob?.size).toBe(2048);
+    expect(uploads).toHaveLength(3);
     const [{ n }] = await db.select({ n: sql<number>`count(*)` }).from(events);
     expect(Number(n)).toBeGreaterThan(0);
   });

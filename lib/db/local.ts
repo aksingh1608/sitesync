@@ -50,7 +50,10 @@ export interface MediaItem {
   actorId: string;
   noteId: string;
   kind: "voice" | "photo";
-  /** Dropped (set to null) once the server has the blob URL, to free space. */
+  /**
+   * Kept after upload: the recording device always plays its own media from
+   * here (works offline). Other devices load it via /api/media/<noteId>.
+   */
   blob: Blob | null;
   mimeType: string;
   sizeBytes: number;
@@ -60,7 +63,6 @@ export interface MediaItem {
   lastError: string | null;
   /** Earliest time of the next upload attempt (same backoff as the outbox). */
   nextAttemptAt: Date | null;
-  blobUrl: string | null;
   createdAt: Date;
 }
 
@@ -96,6 +98,9 @@ export interface Meta {
 }
 type MetaRow<K extends keyof Meta = keyof Meta> = { key: K; value: Meta[K] };
 
+/** Notes from the server carry `mediaUrl` (the authenticated route); `blobPath` is always null here. */
+export type CachedFieldNote = FieldNoteRow & { mediaUrl?: string | null };
+
 export type CachedRollout = Omit<Rollout, "seq"> & { seq?: number };
 
 export class LocalDb extends Dexie {
@@ -104,7 +109,7 @@ export class LocalDb extends Dexie {
   taskReceipts!: Table<ReceiptRow, [string, string]>;
   timeEntries!: Table<TimeEntryRow, string>;
   statusUpdates!: Table<StatusUpdateRow, string>;
-  fieldNotes!: Table<FieldNoteRow, string>;
+  fieldNotes!: Table<CachedFieldNote, string>;
   sites!: Table<SiteRow, string>;
   people!: Table<PersonRow, string>;
   rollouts!: Table<CachedRollout, string>;

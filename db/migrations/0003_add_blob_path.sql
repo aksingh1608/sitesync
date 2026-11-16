@@ -1,0 +1,1 @@
+ALTER TABLE "field_notes" ADD COLUMN "blob_path" text;

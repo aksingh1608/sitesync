@@ -386,8 +386,8 @@ export function reduceNoteCreated(
     taskId: p.taskId,
     kind: p.kind,
     text: p.text,
-    blobUrl: p.blobUrl,
     mediaId: p.mediaId,
+    blobPath: null,
     mimeType: null,
     sizeBytes: null,
     durationSec: null,
@@ -399,8 +399,9 @@ export function reduceNoteCreated(
 
 
 /**
- * The note's blob reached storage. The first upload wins: a retried upload
- * writes to the same path, so a second event with another URL is ignored.
+ * The server stored the note's blob (server-only event). The pathname must be
+ * the one the upload route derives from this note and its media id. The first
+ * recorded upload wins; a retry writes the same path anyway.
  */
 export function reduceNoteMediaUploaded(
   note: FieldNoteRow | undefined,
@@ -409,11 +410,12 @@ export function reduceNoteMediaUploaded(
   if (!note) return reject("note_not_found");
   if (note.personId !== ev.actorId) return forbidden();
   if (note.mediaId === null) return reject("note_has_no_media");
-  if (note.blobUrl !== null) return ok(note, false);
   const p = ev.payload;
+  if (!p.blobPath.startsWith(`notes/${note.id}/${note.mediaId}.`)) return reject("blob_path_mismatch");
+  if (note.blobPath !== null) return ok(note, false);
   return ok({
     ...note,
-    blobUrl: p.blobUrl,
+    blobPath: p.blobPath,
     mimeType: p.mimeType,
     sizeBytes: p.sizeBytes,
     durationSec: p.durationSec ?? null,

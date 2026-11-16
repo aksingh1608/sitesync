@@ -247,9 +247,13 @@ export const fieldNotes = pgTable(
     taskId: uuid("task_id").references(() => tasks.id),
     kind: noteKindEnum("kind").notNull(),
     text: text("text"),
-    blobUrl: text("blob_url"),
     /** Client-side media id; the blob is uploaded after the note syncs. */
     mediaId: uuid("media_id"),
+    /**
+     * Pathname in the PRIVATE Blob store, recorded by the server after upload.
+     * Server-only: the pull never sends it; clients get `/api/media/<noteId>`.
+     */
+    blobPath: text("blob_path"),
     mimeType: text("mime_type"),
     sizeBytes: integer("size_bytes"),
     durationSec: doublePrecision("duration_sec"),

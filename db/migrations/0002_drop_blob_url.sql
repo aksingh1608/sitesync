@@ -1,0 +1,1 @@
+ALTER TABLE "field_notes" DROP COLUMN "blob_url";

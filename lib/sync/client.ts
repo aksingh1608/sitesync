@@ -20,7 +20,8 @@ import { applyEvent } from "./apply";
 import { MAX_EVENTS_PER_SYNC, type SyncRequest, type WireSyncResponse } from "./protocol";
 import { dexieStore } from "./store-dexie";
 
-export const ACTOR_COOKIE = "sitesync_actor";
+import { ACTOR_COOKIE } from "../config";
+export { ACTOR_COOKIE };
 const SYNC_TIMEOUT_MS = 20_000;
 const BACKOFF_BASE_MS = 2_000;
 const BACKOFF_MAX_MS = 5 * 60_000;

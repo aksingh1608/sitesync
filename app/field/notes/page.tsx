@@ -13,7 +13,7 @@ import { localDb, type MediaItem } from "@/lib/db/local";
 import { MAX_VOICE_SECONDS } from "@/lib/domain";
 import { canRecordAudio, startRecording, type Recorder, type Recording } from "@/lib/media/recorder";
 import { saveNote } from "@/lib/sync/media";
-import type { FieldNoteRow } from "@/lib/sync/reducers";
+import type { CachedFieldNote } from "@/lib/db/local";
 
 export default function NotesPage() {
   return (
@@ -204,11 +204,13 @@ function PhotoCapture({ photo, onPhoto }: { photo: Blob | null; onPhoto: (b: Blo
   );
 }
 
-function NoteItem({ note, media, siteName, pending }: { note: FieldNoteRow; media: MediaItem | undefined; siteName?: string; pending: boolean }) {
-  const localUrl = useObjectUrl(note.blobUrl ? null : media?.blob);
-  const src = note.blobUrl ?? localUrl;
+function NoteItem({ note, media, siteName, pending }: { note: CachedFieldNote; media: MediaItem | undefined; siteName?: string; pending: boolean }) {
+  // This device's own recording plays from Dexie (offline too); anything else
+  // comes through the authenticated route. No raw blob URL ever reaches us.
+  const localUrl = useObjectUrl(media?.blob);
+  const src = localUrl ?? note.mediaUrl ?? null;
   const uploadState =
-    note.kind === "text" ? null : note.blobUrl ? "uploaded" : media?.status === "uploaded" ? "uploaded, confirming" : "waiting to upload";
+    note.kind === "text" ? null : note.mediaUrl ? "stored" : media?.status === "uploaded" ? "uploaded, confirming" : "waiting to upload";
   return (
     <li className="space-y-2 rounded-xl border-2 border-slate-300 bg-white p-3" data-testid="note-item">
       <div className="flex flex-wrap items-center gap-2 text-base">
@@ -216,7 +218,7 @@ function NoteItem({ note, media, siteName, pending }: { note: FieldNoteRow; medi
         <span className="text-slate-700">{formatTime(note.createdAt)}</span>
         <span className="text-slate-700">{siteName}</span>
         {pending && <WaitingMarker />}
-        {uploadState && uploadState !== "uploaded" && <WaitingMarker label={uploadState} />}
+        {uploadState && uploadState !== "stored" && <WaitingMarker label={uploadState} />}
       </div>
       {note.text && <p className="whitespace-pre-wrap">{note.text}</p>}
       {note.kind === "voice" && src && <audio controls src={src} className="w-full" preload="none" />}
@@ -224,15 +226,15 @@ function NoteItem({ note, media, siteName, pending }: { note: FieldNoteRow; medi
         // eslint-disable-next-line @next/next/no-img-element
         <img src={src} alt={note.text ?? "Field photo"} className="max-h-60 rounded-lg object-contain" />
       )}
-      {media?.lastError && !note.blobUrl && (
+      {media?.lastError && !note.mediaUrl && (
         <p className="text-sm text-red-700">
           Upload attempt {media.attempts} failed: {media.lastError}
         </p>
       )}
-      {note.blobUrl && (
-        <a href={note.blobUrl} target="_blank" rel="noopener noreferrer" className="block truncate text-sm text-blue-800 underline" data-testid="blob-url">
-          {note.blobUrl}
-        </a>
+      {note.mediaUrl && (
+        <p className="text-sm font-semibold text-green-800" data-testid="media-stored" data-media-url={note.mediaUrl}>
+          Stored on the server{localUrl ? " · playing this device's copy" : ""}
+        </p>
       )}
     </li>
   );

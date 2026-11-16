@@ -15,6 +15,20 @@
       "when": 1794783096885,
       "tag": "0001_day2",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794787277212,
+      "tag": "0002_drop_blob_url",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1794787277906,
+      "tag": "0003_add_blob_path",
+      "breakpoints": true
     }
   ]
 }

@@ -1,22 +1,28 @@
-// POST /api/media: upload a note's voice/photo blob. Server upload (the body
-// passes through this function; Vercel caps it at 4.5 MB, our cap is 4 MB).
-// The route only reads the database; the URL is recorded by the client's
-// `note.media_uploaded` event, like every other write.
-import { and, eq } from "drizzle-orm";
+// POST /api/media: upload a note's voice/photo blob to the PRIVATE Blob store
+// (server upload: Vercel caps the body at 4.5 MB, our cap is 4 MB). The server
+// derives the pathname, stores the blob, then records `note.media_uploaded`
+// itself through processSync. The device never reports a URL or a path.
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { MAX_MEDIA_BYTES } from "@/lib/domain";
-import { fieldNotes, people } from "@/lib/db/schema";
+import { MAX_MEDIA_BYTES, MAX_VOICE_SECONDS } from "@/lib/domain";
+import { mediaPathFor } from "@/lib/events";
 import { withDb } from "@/lib/db/server";
+import { checkUploadAllowed, recordMediaUpload } from "@/lib/media/record";
 import { storeMedia } from "@/lib/media/store";
 import { baseMime, extFor } from "@/lib/media/types";
+import { mediaUrlFor } from "@/lib/sync/visibility";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 const noStore = { "cache-control": "no-store" };
-const Fields = z.object({ mediaId: z.uuid(), noteId: z.uuid(), actorId: z.uuid() });
+const Fields = z.object({
+  mediaId: z.uuid(),
+  noteId: z.uuid(),
+  actorId: z.uuid(),
+  durationSec: z.coerce.number().nonnegative().max(MAX_VOICE_SECONDS + 5).optional(),
+});
 
 const fail = (status: number, error: string) => NextResponse.json({ error }, { status, headers: noStore });
 
@@ -27,34 +33,28 @@ export async function POST(request: Request) {
   } catch {
     return fail(400, "invalid_form");
   }
-  const fields = Fields.safeParse(Object.fromEntries(["mediaId", "noteId", "actorId"].map((k) => [k, form.get(k)])));
+  const raw = Object.fromEntries(
+    ["mediaId", "noteId", "actorId", "durationSec"].flatMap((k) => (form.get(k) === null ? [] : [[k, form.get(k)]])),
+  );
+  const fields = Fields.safeParse(raw);
   const file = form.get("file");
   if (!fields.success || !(file instanceof Blob)) return fail(400, "invalid_request");
-  const { mediaId, noteId, actorId } = fields.data;
+  const { mediaId, noteId, actorId, durationSec } = fields.data;
   const mime = baseMime(file.type || "");
   const ext = extFor(mime);
   if (!ext) return fail(415, `unsupported_type: ${mime || "unknown"}`);
   if (file.size === 0 || file.size > MAX_MEDIA_BYTES) return fail(413, "too_large");
 
   try {
-    const allowed = await withDb(async (db) => {
-      const [actor] = await db.select().from(people).where(eq(people.id, actorId));
-      if (!actor?.active) return "unknown_actor";
-      const [note] = await db
-        .select({ id: fieldNotes.id })
-        .from(fieldNotes)
-        .where(and(eq(fieldNotes.id, noteId), eq(fieldNotes.personId, actorId), eq(fieldNotes.mediaId, mediaId)));
-      return note ? null : "note_not_found";
-    });
-    if (allowed) return fail(allowed === "unknown_actor" ? 403 : 404, allowed);
+    const allowed = await withDb((db) => checkUploadAllowed(db, { actorId, noteId, mediaId }));
+    if (!allowed.ok) return fail(allowed.status, allowed.error);
 
-    const url = await storeMedia({
-      pathname: `notes/${noteId}/${mediaId}.${ext}`,
-      file,
-      contentType: mime,
-      origin: new URL(request.url).origin,
-    });
-    return NextResponse.json({ url }, { headers: noStore });
+    const blobPath = await storeMedia({ pathname: mediaPathFor(noteId, mediaId, ext), file, contentType: mime });
+    const recorded = await withDb((db) =>
+      recordMediaUpload(db, { actorId, noteId, mediaId, blobPath, mimeType: mime, sizeBytes: file.size, durationSec }),
+    );
+    if (!recorded.ok) return fail(409, recorded.error);
+    return NextResponse.json({ ok: true, mediaUrl: mediaUrlFor(noteId, blobPath) }, { headers: noStore });
   } catch (err) {
     if (err instanceof Error && err.message === "blob_not_configured") return fail(503, "blob_not_configured");
     console.error("[api/media] failed", err);

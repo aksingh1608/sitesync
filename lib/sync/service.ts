@@ -1,12 +1,12 @@
 // The sync transaction: insert events -> apply reducers to newly inserted ones
 // -> read changes since the cursor for this actor. All in one transaction.
 import { eq, sql } from "drizzle-orm";
-import { EventSchema } from "../events";
+import { EventSchema, SERVER_ONLY_EVENT_TYPES } from "../events";
 import { events, people } from "../db/schema";
 import { applyEvent } from "./apply";
 import type { SyncRequest, SyncResponse } from "./protocol";
 import { drizzleStore, type Db } from "./store-drizzle";
-import { pullChanges } from "./visibility";
+import { emptyChanges, pullChanges } from "./visibility";
 
 /**
  * Serializes sync writers so `seq` order matches commit order. Without this, a
@@ -22,7 +22,14 @@ export type SyncOutcome =
 export async function processSync(
   db: Db,
   req: SyncRequest,
-  opts: { now?: () => Date; pageSize?: number } = {},
+  opts: {
+    now?: () => Date;
+    pageSize?: number;
+    /** Server-internal callers only (e.g. POST /api/media). Allows SERVER_ONLY_EVENT_TYPES. */
+    trusted?: boolean;
+    /** Skip the cursor pull (server-internal writes don't need one). */
+    skipPull?: boolean;
+  } = {},
 ): Promise<SyncOutcome> {
   const now = opts.now ?? (() => new Date());
 
@@ -54,6 +61,11 @@ export async function processSync(
       const ev = parsed.data;
       if (ev.actorId !== req.actorId) {
         rejected.push({ id: ev.id, reason: "actor_mismatch: event actorId differs from request actorId" });
+        continue;
+      }
+      if (!opts.trusted && SERVER_ONLY_EVENT_TYPES.includes(ev.type)) {
+        // Not stored: a device must never be able to claim where a blob lives.
+        rejected.push({ id: ev.id, reason: "forbidden" });
         continue;
       }
 
@@ -102,7 +114,9 @@ export async function processSync(
     }
 
     const cursor = req.cursor === null ? 0 : Number(req.cursor);
-    const pulled = await pullChanges(tx, actor, cursor, opts.pageSize);
+    const pulled = opts.skipPull
+      ? { changes: emptyChanges(), revocations: [], cursor, hasMore: false }
+      : await pullChanges(tx, actor, cursor, opts.pageSize);
     return {
       ok: true as const,
       response: {

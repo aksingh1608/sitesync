@@ -4,6 +4,9 @@ import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { events, fieldNotes, revocations, statusUpdates, timeEntries } from "@/lib/db/schema";
 import type { Db } from "@/lib/sync/store-drizzle";
+import { z } from "zod";
+import { mediaPathFor } from "@/lib/events";
+import { canViewNote, checkUploadAllowed, mediaEventId, recordMediaUpload, SERVER_DEVICE_ID } from "@/lib/media/record";
 import { processSync } from "@/lib/sync/service";
 import { at, event, ids, makeDb, NOW, sync, taskCreated, uuid } from "./helpers";
 
@@ -263,52 +266,97 @@ describe("pull pagination", () => {
   });
 });
 
-describe("note media", () => {
-  const voiceNote = (noteId: string, mediaId: string) =>
+describe("note media (private store, server-recorded)", () => {
+  const voiceNote = (noteId: string, mediaId: string, actorId = ids.techA) =>
     event({
       type: "note.created",
-      actorId: ids.techA,
+      actorId,
       clientTs: ts(0),
       payload: { noteId, siteId: ids.siteA, kind: "voice", mediaId },
     });
-  const uploaded = (actorId: string, noteId: string, blobUrl: string, minute = 1) =>
-    event({
+  const record = (noteId: string, mediaId: string, actorId = ids.techA, blobPath = mediaPathFor(noteId, mediaId, "m4a")) =>
+    recordMediaUpload(db, { actorId, noteId, mediaId, blobPath, mimeType: "audio/mp4", sizeBytes: 12345, durationSec: 7.5 }, NOW);
+
+  it("never accepts note.media_uploaded from a device, and does not store it", async () => {
+    const [noteId, mediaId] = [uuid(), uuid()];
+    await sync(db, ids.techA, [voiceNote(noteId, mediaId)]);
+    const claim = event({
       type: "note.media_uploaded",
-      actorId,
-      clientTs: ts(minute),
-      payload: { noteId, blobUrl, mimeType: "audio/mp4", sizeBytes: 12345, durationSec: 7.5 },
+      actorId: ids.techA,
+      clientTs: ts(1),
+      payload: { noteId, blobPath: mediaPathFor(noteId, mediaId, "m4a"), mimeType: "audio/mp4", sizeBytes: 1 },
     });
-
-  it("attaches the uploaded blob to the note once, first upload wins", async () => {
-    const noteId = uuid();
-    const created = voiceNote(noteId, uuid());
-    const up = uploaded(ids.techA, noteId, "https://blob.example.com/a.m4a");
-    const res = await sync(db, ids.techA, [created, up]);
-    expect(res.accepted).toEqual([created.id, up.id]);
+    expect((await sync(db, ids.techA, [claim])).rejected).toEqual([{ id: claim.id, reason: "forbidden" }]);
+    expect(await db.select().from(events).where(eq(events.id, claim.id))).toEqual([]);
     const [note] = await db.select().from(fieldNotes).where(eq(fieldNotes.id, noteId));
-    expect(note).toMatchObject({ blobUrl: "https://blob.example.com/a.m4a", mimeType: "audio/mp4", sizeBytes: 12345, durationSec: 7.5 });
-
-    const second = uploaded(ids.techA, noteId, "https://blob.example.com/b.m4a", 2);
-    expect((await sync(db, ids.techA, [second])).accepted).toEqual([second.id]);
-    const [after] = await db.select().from(fieldNotes).where(eq(fieldNotes.id, noteId));
-    expect(after.blobUrl).toBe("https://blob.example.com/a.m4a");
-    expect(after.seq).toBe(note.seq); // unchanged, not rewritten
+    expect(note.blobPath).toBeNull();
   });
 
-  it("rejects uploads for someone else's note or a note without media", async () => {
-    const noteId = uuid();
-    await sync(db, ids.techA, [voiceNote(noteId, uuid())]);
-    const other = uploaded(ids.techB, noteId, "https://blob.example.com/x.m4a");
-    expect((await sync(db, ids.techB, [other])).rejected).toEqual([{ id: other.id, reason: "forbidden" }]);
+  it("records the server-chosen pathname once; retries are duplicates; the pull hides the path", async () => {
+    const [noteId, mediaId] = [uuid(), uuid()];
+    const before = await sync(db, ids.techA, [voiceNote(noteId, mediaId)]);
+    expect(await record(noteId, mediaId)).toEqual({ ok: true });
+    expect(await record(noteId, mediaId)).toEqual({ ok: true }); // lost response -> retry
+
+    const stored = await db.select().from(events).where(eq(events.type, "note.media_uploaded"));
+    expect(stored).toHaveLength(1);
+    expect(stored[0]).toMatchObject({ id: mediaEventId(mediaId), deviceId: SERVER_DEVICE_ID, actorId: ids.techA, applied: true });
+    const [note] = await db.select().from(fieldNotes).where(eq(fieldNotes.id, noteId));
+    expect(note).toMatchObject({ blobPath: `notes/${noteId}/${mediaId}.m4a`, mimeType: "audio/mp4", sizeBytes: 12345, durationSec: 7.5 });
+
+    for (const actor of [ids.techA, ids.coordinator]) {
+      const pulled = await sync(db, actor, [], actor === ids.techA ? before.cursor : null);
+      const row = pulled.changes.field_notes.find((n) => n.id === noteId)!;
+      expect(row.blobPath).toBeNull();
+      expect(row.mediaUrl).toBe(`/api/media/${noteId}`);
+      expect(JSON.stringify(pulled)).not.toContain(`${mediaId}.m4a`);
+    }
+  });
+
+  it("rejects a pathname that is not this note's, someone else's note, or a note without media", async () => {
+    const [noteId, mediaId] = [uuid(), uuid()];
+    await sync(db, ids.techA, [voiceNote(noteId, mediaId)]);
+    expect(await record(noteId, mediaId, ids.techA, mediaPathFor(noteId, uuid(), "m4a"))).toEqual({ ok: false, error: "blob_path_mismatch" });
+    // The event id is derived from the media id, so a rejection sticks for that media (like any resend).
+    expect(await record(noteId, mediaId)).toEqual({ ok: false, error: "blob_path_mismatch" });
+    const [other, otherMedia] = [uuid(), uuid()];
+    await sync(db, ids.techA, [voiceNote(other, otherMedia)]);
+    expect(await record(other, otherMedia, ids.techB)).toEqual({ ok: false, error: "forbidden" });
 
     const textNote = uuid();
     await sync(db, ids.techA, [
       event({ type: "note.created", actorId: ids.techA, clientTs: ts(0), payload: { noteId: textNote, siteId: ids.siteA, kind: "text", text: "t" } }),
     ]);
-    const bad = uploaded(ids.techA, textNote, "https://blob.example.com/y.m4a");
-    expect((await sync(db, ids.techA, [bad])).rejected[0].reason).toBe("note_has_no_media");
-    const missing = uploaded(ids.techA, uuid(), "https://blob.example.com/z.m4a");
-    expect((await sync(db, ids.techA, [missing])).rejected[0].reason).toBe("note_not_found");
+    expect(await record(textNote, uuid())).toEqual({ ok: false, error: "note_has_no_media" });
+    expect(await record(uuid(), uuid())).toEqual({ ok: false, error: "note_not_found" });
+    // Shape-invalid paths never reach the reducer.
+    expect((await record(noteId, mediaId, ids.techA, "https://evil.example.com/x.m4a")).ok).toBe(false);
+  });
+
+  it("only lets the note's author upload, and only for its media id", async () => {
+    const [noteId, mediaId] = [uuid(), uuid()];
+    await sync(db, ids.techA, [voiceNote(noteId, mediaId)]);
+    expect(await checkUploadAllowed(db, { actorId: ids.techA, noteId, mediaId })).toEqual({ ok: true });
+    expect(await checkUploadAllowed(db, { actorId: ids.techB, noteId, mediaId })).toMatchObject({ ok: false, status: 404 });
+    expect(await checkUploadAllowed(db, { actorId: ids.techA, noteId, mediaId: uuid() })).toMatchObject({ ok: false, status: 404 });
+    expect(await checkUploadAllowed(db, { actorId: uuid(), noteId, mediaId })).toMatchObject({ ok: false, status: 403 });
+  });
+
+  it("lets the author and the office view media, nobody else", () => {
+    const note = { personId: ids.techA };
+    expect(canViewNote({ id: ids.techA, role: "technician", active: true }, note)).toBe(true);
+    expect(canViewNote({ id: ids.techB, role: "technician", active: true }, note)).toBe(false);
+    expect(canViewNote({ id: ids.techB, role: "foreman", active: true }, note)).toBe(false);
+    expect(canViewNote({ id: ids.coordinator, role: "coordinator", active: true }, note)).toBe(true);
+    expect(canViewNote({ id: ids.manager, role: "manager", active: true }, note)).toBe(true);
+    expect(canViewNote({ id: ids.techA, role: "technician", active: false }, note)).toBe(false);
+  });
+
+  it("derives a stable, valid UUID v4 event id per media id", () => {
+    const m = uuid();
+    expect(mediaEventId(m)).toBe(mediaEventId(m));
+    expect(mediaEventId(m)).not.toBe(mediaEventId(uuid()));
+    expect(z.uuid({ version: "v4" }).safeParse(mediaEventId(m)).success).toBe(true);
   });
 
   it("refuses a note with neither text nor media", async () => {

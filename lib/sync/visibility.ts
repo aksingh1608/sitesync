@@ -25,6 +25,20 @@ import {
 } from "../db/schema";
 import type { RevocationChange, SyncChanges } from "./protocol";
 
+/** The only media URL clients ever see: an authenticated route on this app. */
+export const mediaUrlFor = (noteId: string, blobPath: string | null) => (blobPath ? `/api/media/${noteId}` : null);
+
+export const emptyChanges = (): SyncChanges => ({
+  tasks: [],
+  task_receipts: [],
+  time_entries: [],
+  status_updates: [],
+  field_notes: [],
+  sites: [],
+  people: [],
+  rollouts: [],
+});
+
 /** Maximum rows (all tables together, revocations included) per pull. */
 export const PULL_PAGE_SIZE = 500;
 import type { Db } from "./store-drizzle";
@@ -131,12 +145,15 @@ export async function pullChanges(
   const newCursor = page.length ? page[page.length - 1].row.seq : cursor;
 
   const keep = <T extends { seq: number }>(rows: T[]) => rows.filter((row) => row.seq <= newCursor);
+  // The private blob pathname never leaves the server; clients get the
+  // authenticated media route instead.
+  const notes = keep(fn).map(({ blobPath, ...note }) => ({ ...note, blobPath: null, mediaUrl: mediaUrlFor(note.id, blobPath) }));
   const changes: SyncChanges = {
     tasks: keep(t),
     task_receipts: keep(r),
     time_entries: keep(te),
     status_updates: keep(su),
-    field_notes: keep(fn),
+    field_notes: notes,
     sites: keep(s),
     people: keep(p),
     rollouts: keep(ro),

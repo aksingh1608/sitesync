@@ -83,9 +83,10 @@ never the device's. Weeks start Monday (calendar weeks/months, not rolling windo
 
 `task.created`, `task.updated`, `task.status_changed`, `task.delivered`, `task.seen`,
 `task.acknowledged`, `time.clock_in`, `time.clock_out`, `status.set`, `note.created`,
-`note.media_uploaded` (Day 2).
-Day 2 payload changes: `note.created.mediaId` (local media id; blob uploaded later),
-`note.media_uploaded { noteId, blobUrl, mimeType, sizeBytes, durationSec? }` (first upload wins),
+`note.media_uploaded` (Day 2, **server-only**).
+Day 2 payload changes: `note.created.mediaId` (local media id; blob uploaded later; devices can
+no longer send any URL), `note.media_uploaded { noteId, blobPath, mimeType, sizeBytes,
+durationSec? }`, written only by the server after it stored the blob (first upload wins),
 `status.set.status` nullable (= clear status), `time.clock_in/out.locationError`
 (`denied|unavailable|timeout|unsupported`, feeds the HR flag reason).
 
@@ -93,16 +94,32 @@ Receipts from the device: `task.delivered` once per device+person after a task f
 the server; `task.seen` the first time the detail opens; `task.acknowledged` from "Got it".
 "Once" is enforced by Dexie `receiptMarks` (survives cache rebuilds), not by the server.
 
-## Media
+**Server-only events** (`SERVER_ONLY_EVENT_TYPES` in `lib/events.ts`): `/api/sync` rejects them
+from devices with `forbidden` and does not store them. Server code creates them with
+`processSync(db, req, { trusted: true, skipPull: true })`, deviceId `server:media`, and a
+deterministic event id (`mediaEventId(mediaId)`), so retries are duplicates.
+
+## Media (private Vercel Blob store)
 
 Voice (MediaRecorder; mime picked with `isTypeSupported`, iOS gives audio/mp4; 2 min cap) and
 photos (file input `capture`, compressed to 1600 px JPEG) are stored as Blobs in Dexie `media`,
-written in the same transaction as their `note.created`. After the note syncs, the queue POSTs the
-blob to `/api/media` (Node runtime, server upload, 4 MB cap; checks the note belongs to the actor),
-which `put`s it to Vercel Blob at `notes/<noteId>/<mediaId>.<ext>` (public store, no random
-suffix, overwrite allowed, so retries land on the same URL). Then the client queues
-`note.media_uploaded`. Without `BLOB_READ_WRITE_TOKEN`, dev (and `pnpm start` with
-`SITESYNC_LOCAL_MEDIA=1`) stores files in `.data/media`, served by `/api/media/[name]`.
+written in the same transaction as their `note.created`. After the note syncs, the queue
+(`lib/sync/media.ts`) POSTs the blob to `/api/media` (Node runtime, server upload, 4 MB cap).
+The route (`lib/media/record.ts`): checks the actor authored the note with that media id,
+`put`s it to the **private** store at `notes/<noteId>/<mediaId>.<ext>` (no random suffix,
+overwrite allowed), then records `note.media_uploaded { blobPath }` itself. The reducer only
+accepts a path under `notes/<noteId>/<that mediaId>.`.
+
+Reading: **no blob URL or pathname ever reaches a client.** The pull sends `blobPath: null` and
+`mediaUrl: "/api/media/<noteId>"`. `GET /api/media/[noteId]` reads the demo actor cookie, allows
+the note's author and office roles (`canViewNote`, mirrors pull visibility), 404s otherwise, and
+streams the blob with `get(path, { access: "private" })`: `Cache-Control: private, no-cache`,
+ETag/`If-None-Match` -> 304, and byte ranges (206) for iOS audio. The recording device keeps its
+Blob in Dexie and always plays that copy (offline too); other devices use the route (online only).
+
+Auth to Blob: on Vercel the SDK uses OIDC + `BLOB_STORE_ID` (set when the store is connected to
+the project); elsewhere `BLOB_READ_WRITE_TOKEN`. Without either, dev (and `pnpm start` with
+`SITESYNC_LOCAL_MEDIA=1`) stores files in `.data/media`; production refuses uploads (503).
 
 ## Dexie schema versioning
 
@@ -146,7 +163,8 @@ app/
   ~offline/page.tsx      service-worker fallback page
   api/sync/route.ts      POST /api/sync (Zod → processSync)
   api/people/route.ts    GET directory for the role picker
-  api/media/route.ts     POST media upload (-> Vercel Blob);  api/media/[name] dev fallback
+  api/media/route.ts     POST upload -> private Blob + server-recorded note.media_uploaded
+  api/media/[noteId]/    GET: authorized streaming of a note's media (ETag, Range)
   serwist/[path]/route.ts, sw.ts, manifest.ts, layout.tsx
 components/              sync-manager (triggers + upload hook), update-banner, sync-status, use-local,
                          field/ (chrome, ui primitives, task-card, photo-input, hooks), ui/ (shadcn)
@@ -154,7 +172,8 @@ lib/
   domain.ts              enums, roles, status transitions (no deps)
   events.ts              Zod event union (shared)
   geo.ts (haversine, shared), time.ts (branch-tz days/weeks), geolocate.ts, uuid.ts, config.ts
-  media/                 recorder (MediaRecorder), compress (photos), store (Blob / dev fallback), types
+  media/                 recorder, compress (photos), store (private Blob / dev fallback),
+                         record (upload checks + server event), types
   db/schema.ts           Drizzle schema (all tables, incl. later-day ones)
   db/server.ts           Neon Pool + Drizzle per request
   db/local.ts            Dexie schema: outbox, cache tables, meta
@@ -185,7 +204,7 @@ pnpm icons         # regenerate placeholder icons
 ```
 
 Secrets only in `.env.local` (gitignored). `.env.example` lists every key:
-`DATABASE_URL`, `BLOB_READ_WRITE_TOKEN` (Day 2), `SITESYNC_LOCAL_MEDIA` (optional dev flag), and
+`DATABASE_URL`, `BLOB_READ_WRITE_TOKEN` or `BLOB_STORE_ID` + OIDC (Day 2, private store), `SITESYNC_LOCAL_MEDIA` (optional dev flag), and
 later-day keys.
 
 ## Conventions
@@ -218,9 +237,12 @@ later-day keys.
 
 - Revocations cover tasks only. Sites/rollouts a worker no longer has work at stay cached
   (reference data, harmless). The old assignee keeps their own (frozen) receipt row on the server.
-- `note.media_uploaded.blobUrl` is trusted from the client (any URL passes Zod). Day 6 hardening:
-  check it is under our Blob store / matches `notes/<noteId>/`.
-- Blob store is public with unguessable paths (UUIDs); private Blob + signed reads is a later step.
+- Done (were the first two Day 3 hardening items): the server no longer trusts a device-reported
+  media URL (it records the pathname itself), and media lives in a private store served only
+  through the authenticated `/api/media/[noteId]` route.
+- Media auth uses the demo actor cookie, so it is only as strong as demo mode (no real login).
+- Local media blobs are kept on the recording device indefinitely (no eviction yet).
+- Other devices can't play media offline (the route is network-only in the service worker).
 - Demo mode: no real auth. The API trusts `actorId`; authorization assumes the actor is honest.
 - Media stuck if its `note.created` is rejected by the server (blob stays on the device).
 - Reseeding deletes rows; already-synced clients should Reset local data (/debug).

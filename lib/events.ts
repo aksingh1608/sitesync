@@ -98,18 +98,22 @@ export const NoteCreatedPayload = z
     taskId: id.nullable().default(null),
     kind: z.enum(NOTE_KINDS),
     text: z.string().max(10_000).nullable().default(null),
-    blobUrl: z.url().nullable().default(null),
-    /** Local media id (Dexie `media` table). The blob is uploaded later, then `note.media_uploaded`. */
+    /**
+     * Local media id (Dexie `media` table). The device uploads the blob later;
+     * the SERVER then records `note.media_uploaded`. Devices never send URLs.
+     */
     mediaId: id.nullable().default(null),
   })
-  .refine(
-    (n) => n.text !== null || n.blobUrl !== null || n.mediaId !== null,
-    "a note needs text, a blobUrl or a mediaId",
-  );
+  .refine((n) => n.text !== null || n.mediaId !== null, "a note needs text or a mediaId");
 
+/** `notes/<noteId>/<mediaId>.<ext>`: the only pathname shape the upload route writes. */
+export const MEDIA_PATH_RE = /^notes\/[0-9a-f-]{36}\/[0-9a-f-]{36}\.[a-z0-9]{2,5}$/;
+export const mediaPathFor = (noteId: string, mediaId: string, ext: string) => `notes/${noteId}/${mediaId}.${ext}`;
+
+/** Written by the server (POST /api/media) after it stored the blob. Never accepted from devices. */
 export const NoteMediaUploadedPayload = z.strictObject({
   noteId: id,
-  blobUrl: z.url().max(2000),
+  blobPath: z.string().regex(MEDIA_PATH_RE),
   mimeType: z.string().min(1).max(100),
   sizeBytes: z.number().int().nonnegative().max(MAX_MEDIA_BYTES),
   durationSec: z.number().nonnegative().max(60 * 60).optional(),
@@ -139,6 +143,12 @@ export type SyncEventInput = z.input<typeof EventSchema>;
 export type EventType = SyncEvent["type"];
 export type EventOf<T extends EventType> = Extract<SyncEvent, { type: T }>;
 export const EVENT_TYPES = EventSchema.options.map((o) => o.shape.type.value) as EventType[];
+
+/**
+ * Event types only the server may create (via processSync's `trusted` option).
+ * /api/sync rejects them from devices with "forbidden".
+ */
+export const SERVER_ONLY_EVENT_TYPES: readonly EventType[] = ["note.media_uploaded"];
 
 /** Receipt event types, in chain order. */
 export const RECEIPT_EVENT_TYPES = ["task.delivered", "task.seen", "task.acknowledged"] as const;

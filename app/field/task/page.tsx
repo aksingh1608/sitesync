@@ -224,7 +224,7 @@ function TaskDetail() {
             {notes.map((n) => (
               <li key={n.id} className="flex flex-wrap items-center gap-2">
                 <span className="font-semibold capitalize">{n.kind}</span>
-                <span>{n.text ?? (n.blobUrl ? "attached" : "")}</span>
+                <span>{n.text ?? (n.mediaId ? "attached" : "")}</span>
                 <span className="text-slate-700">{formatTime(n.createdAt)}</span>
                 {(pending.notes.has(n.id) || n.seq === undefined) && <WaitingMarker />}
               </li>

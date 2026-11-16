@@ -53,3 +53,12 @@ export function formatInZone(
 ): string {
   return new Intl.DateTimeFormat("en-US", { timeZone, ...opts }).format(new Date(date));
 }
+
+/** ISO weekday of a day key: Monday = 1 ... Sunday = 7. */
+export function isoWeekday(key: string): number {
+  const d = keyToUtc(key).getUTCDay();
+  return d === 0 ? 7 : d;
+}
+
+/** The Monday of the week containing `key` (timesheets are calendar weeks, Monday first). */
+export const startOfWeekKey = (key: string) => addDays(key, 1 - isoWeekday(key));

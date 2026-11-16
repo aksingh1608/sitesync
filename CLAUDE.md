@@ -12,7 +12,8 @@ instruction reached the worker (receipt chain: sent → delivered → seen → a
 - Demo mode has no real login: `/` picks a seeded person (actorId in Dexie + `sitesync_actor` cookie).
 - **Access gate** (brought forward from Day 6): `proxy.ts` (Next 16's renamed middleware) requires
   the shared `DEMO_ACCESS_CODE` on every page and API route except `/manifest.webmanifest`,
-  `/icons/*`, `/serwist/*`, `/~offline`, `/_next/static|image` and `POST /api/unlock`
+  `/icons/*`, `/serwist/*`, `/~offline`, `/_next/static|image`, `POST /api/unlock` and
+  `/api/escalations/run` (which requires `Authorization: Bearer CRON_SECRET` itself)
   (`isPublicPath` in `lib/access.ts`; the `matcher` is only a pre-filter and is tested against it).
   `/api/unlock` sets the httpOnly, Secure (prod), SameSite=Lax cookie `sitesync_access` = SHA-256 of
   the code (rotating the code relocks everyone). Locked pages get an inline code form with **401,
@@ -161,6 +162,65 @@ aggregated in SQL), polled every 5 s (`OFFICE_POLL_MS`) and paused while the tab
   clock-out), CSV (formula-safe, BOM), assignee suggestions (active field people whose trade fits,
   people at the site first). Timesheets use calendar weeks (Monday); "Needs review" spans 30 days.
 
+## Escalation, push and SMS (Day 4)
+
+Fixed rules, not AI. **Side effects (push, SMS) happen only through the `escalations` table,
+never in reducers.**
+- **Demo clock** (`lib/clock.ts`): rule time = real time + `demo_settings.clock_offset_ms`.
+  Rule code gets a `Clock`, never calls `Date.now()`. Office "Demo clock" bar (managers and
+  coordinators): +15 min / +30 min / +1 hour / Reset (`POST /api/office/demo-clock`, then runs the
+  rules). The office snapshot's `now` is demo time (amber/overdue match). Field devices keep
+  their own clock. Reseeding resets the offset. Reset does NOT undo escalations already sent.
+- **Policy** (`lib/escalation/policy.ts`) and pure `evaluateEscalations(state, clock)`
+  (`lib/escalation/rules.ts`), tested with a fixed clock:
+  - `ack` (sent, not acknowledged; current assignee only): level 0 push at first sight, then
+    from that moment +30 min push again, +60 SMS, +90 coordinator alert. Urgent/high x1,
+    normal x2, low: level 0 only. Office assignees (material requests) get level 0 only.
+    Episode = assignee@sentAt, so a reassignment starts a new ladder.
+  - `overdue` (due passed, not done/cancelled, field assignee, not follow-up/low): reminder push
+    once (level 1), coordinator alert 2 h after the reminder (level 2). Episode = due date.
+  - `blocked`: push coordinators at once (level 0), alert after 2 h (level 1). Episode = the
+    status event id.
+  - `changed`: push the assignee when due date or priority changed (level 0, fresh changes only).
+  - The ladder is counted from the level-0 row's `scheduled_for` (when the engine first saw it,
+    demo clock), so old seed data never floods and fast-forward works on new tasks.
+  - Catch-up: several levels due at once -> only the highest is sent, lower ones `skipped`
+    (`superseded`). First notifications older than 60 REAL min -> `skipped` (`stale`).
+  - Stop: acknowledged / done / cancelled (or unblocked, new due date, reassigned) -> no new
+    steps and open rows close themselves (`resolved_at`; alerts also `status=resolved`).
+    "Mark handled" (`POST /api/office/escalations/handle`) closes all open rows of a task and
+    stops those ladders (`handled_by`).
+  - Coordinator alerts go to the task creator (if office, not HR) + every active coordinator.
+- **Runner** (`lib/escalation/run.ts`): load state -> rules -> claim each step with
+  `INSERT ... ON CONFLICT DO NOTHING` on unique `(task_id, rule, episode, level)` -> only the
+  claimer sends -> update status (`sent|failed|skipped`, provider id, error). At-most-once: a
+  crash after the claim leaves `pending`, never a duplicate SMS. Triggers: after every
+  `/api/sync` (`after()`; throttled when nothing was accepted), every dashboard snapshot poll
+  (throttled to 30 s across instances by a conditional UPDATE on `demo_settings`), demo clock
+  moves, `GET|POST /api/escalations/run` (Bearer `CRON_SECRET`), daily Vercel cron
+  (`vercel.json`, 13:00 UTC; Hobby allows once a day, +-59 min) as a safety net.
+- **Web Push** (`web-push` 3.6.7, VAPID): `push_subscriptions` unique per (endpoint, person);
+  `POST|DELETE /api/push/subscribe` (field scope = `sitesync_actor`, office scope = office
+  cookie; subscribing removes the same endpoint's other person of that scope). 404/410 -> row
+  deleted. `app/sw.ts` shows `{title, body, url, tag}` and opens `url` on tap (field:
+  `/field/task?id=`, office: `/office/tasks?task=`). Field "Enable notifications" card (task
+  list + Me); on iOS outside the Home Screen it shows Add-to-Home-Screen steps instead (iOS only
+  pushes to installed web apps, and asks only from a tap). Existing subscriptions are
+  re-registered silently on app start. Dev (`next dev`) has no service worker: no push.
+- **SMS** (`lib/sms/`): `SmsProvider` with `mock` and `twilio` (REST, no SDK), `SMS_PROVIDER`
+  default mock. Only the person picked on `/office/sms` ("Real SMS recipient", stored in
+  `demo_settings.sms_demo_person_id`) is texted for real, at `SMS_DEMO_TO_NUMBER`; everyone
+  else is mock. Every SMS is a `sms_messages` row (the SMS log) with the number masked, our
+  `body`, what the provider really sent (`sent_body`) and status (mock: `mocked`; Twilio
+  statuses are refreshed from the API when the log is opened). **Twilio trial** (detected via
+  the Accounts API): custom bodies are not allowed, so the template `sms_internal_alerts` is
+  sent instead; "Reply 1 to acknowledge" is left out (custom text impossible, shared trial
+  number, inbound webhook only via the trial console). SMS links use `/t/<last 10 hex of task
+  id>` -> `/field/task?id=` (host from `VERCEL_PROJECT_PRODUCTION_URL`).
+- Office UI: Alerts panel on the board (open escalations, highest first, "Mark handled"),
+  escalation timeline in the task drawer (next to receipts), `/office/sms` log, office
+  "Enable notifications" button in the demo clock bar.
+
 ## Media (private Vercel Blob store)
 
 Voice (MediaRecorder; mime picked with `isTypeSupported`, iOS gives audio/mp4; 2 min cap) and
@@ -229,6 +289,10 @@ app/
   api/office/            GET snapshot, tasks/[taskId], timesheets (+csv), team
   api/media/route.ts     POST upload -> private Blob + server-recorded note.media_uploaded
   api/media/[noteId]/    GET: authorized streaming of a note's media (ETag, Range)
+  api/escalations/run/   GET (Vercel cron) / POST: run the rules, Bearer CRON_SECRET
+  api/push/subscribe/    POST / DELETE push subscriptions
+  api/office/            + demo-clock, escalations/handle, sms (log, demo recipient, test SMS)
+  t/[code]/              short task link for SMS
   serwist/[path]/route.ts, sw.ts, manifest.ts, layout.tsx
 components/              sync-manager (triggers + upload hook), update-banner, sync-status, use-local,
                          field/ (chrome, ui primitives, task-card, photo-input, hooks), ui/ (shadcn)
@@ -251,6 +315,10 @@ lib/
   sync/media.ts          saveNote + media upload queue
   field/                 sites.ts (site preselection, Clock + Notes), notes.ts (why Save is disabled)
   sync/status.ts         describeSync: one sync view for top bar + Me (no signal is not an error)
+  clock.ts               demo clock (offset in demo_settings), run throttle
+  escalation/            policy (config), rules (pure), run (claim + send)
+  push/                  send (web-push, server), client (support checks, subscribe)
+  sms/                   provider (interface, mock, routing), twilio (REST), send (log rows)
   tasks/grouping.ts      Overdue / Today / Next 7 days / Later / Follow-ups (rolling, branch tz)
 lib/office/              auth (office actor), queries (server reads + SQL stats), rules, derive,
                          timesheets (rows + CSV), route (GET wrapper)
@@ -258,7 +326,8 @@ components/office/       data (polling, writes via /api/sync), shell, ui, tasks
 db/  migrations/ (drizzle-kit), migrate.ts, seed.ts, seed-data.ts, seed-fast.ts, connect.ts
 tests/  Vitest: sync, day2 (authz, revocations, paging, media; PGlite), reducers, client,
         client-day2, media (fake-indexeddb + PGlite), grouping, seed, field, day3 (office events,
-        devices), office (rules + queries on the seed)
+        devices), office (rules + queries on the seed), escalation-rules (pure, fixed clock),
+        escalation-run (PGlite: demo flow, concurrency, push cleanup, SMS routing, throttle)
 scripts/gen-icons.ts     placeholder PWA icons (no deps)
 ```
 
@@ -277,8 +346,12 @@ CODE=… BASE=http://localhost:3100 pnpm e2e:office   # headless Playwright: /of
 
 Secrets only in `.env.local` (gitignored). `.env.example` lists every key:
 `DATABASE_URL`, `BLOB_READ_WRITE_TOKEN` or `BLOB_STORE_ID` + OIDC (Day 2, private store),
-`DEMO_ACCESS_CODE` (access gate; required in production), `SITESYNC_LOCAL_MEDIA` (optional dev flag), and
-later-day keys.
+`DEMO_ACCESS_CODE` (access gate; required in production), `SITESYNC_LOCAL_MEDIA` (optional dev flag),
+Day 4: `NEXT_PUBLIC_VAPID_PUBLIC_KEY` (build-time, starts with "B", 87 chars), `VAPID_PRIVATE_KEY`,
+`VAPID_SUBJECT`, `CRON_SECRET`, `SMS_PROVIDER` (mock|twilio), `TWILIO_ACCOUNT_SID`,
+`TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`, `SMS_DEMO_TO_NUMBER`; and later-day keys.
+On Vercel, `vercel env ls` shows a "Config" (non-sensitive) value as an encrypted `eyJ2…`
+envelope (base64 of `{"v`), not the value itself.
 
 ## Conventions
 
@@ -300,13 +373,24 @@ later-day keys.
 3. **Day 3 (done): coordinator dashboard.** Fast seed, devices table, office events. Live board (who is where, status), receipts view
    (sent/delivered/seen/acknowledged per task), rollout board (stores by stage), timesheets with
    flagged clock-ins, task create/assign.
-4. **Day 4: escalation + push.** Web Push subscriptions, rule-based escalation ladder
-   push → SMS (Twilio) → coordinator alert for unacknowledged urgent tasks (`escalations` table).
+4. **Day 4 (done): escalation + push.** Demo clock, pure escalation rules, claim-once runner,
+   Web Push (field + office), SMS fallback (mock / Twilio for one demo recipient), alerts panel,
+   escalation timeline, SMS log, daily cron safety net.
 5. **Day 5: AI agents.** Dispatch agent (suggest assignee), field report agent (voice note →
    transcript → structured report/follow-ups), digest agent (`digests`), ops copilot.
 6. **Day 6: polish + demo.** Deploy to Vercel, demo script, airplane-mode walkthrough, hardening.
 
-## Known gaps (after Day 3)
+## Known gaps (after Day 4)
+
+- Escalations run only when something calls them (syncs, dashboard polls, clock moves, the
+  daily cron). On Hobby there is no frequent cron, so with every app closed a step can be late
+  by up to a day. Pro (per-minute cron) or an external pinger to `/api/escalations/run` fixes it.
+- Sending is at-most-once: a crash between claim and send leaves a `pending` row (shown in the
+  timeline), never retried. Failed pushes/SMS are recorded, not retried; the next level still fires.
+- Twilio trial: the phone gets Twilio's template text, not ours; no two-way SMS.
+- iOS push needs the app on the Home Screen; Android/desktop Chrome work from the browser.
+- One browser = one push endpoint: in demo mode it can carry one field person + office people.
+
 
 - Revocations cover tasks only. Sites/rollouts a worker no longer has work at stay cached
   (reference data, harmless). The old assignee keeps their own (frozen) receipt row on the server.
@@ -326,7 +410,7 @@ later-day keys.
   to the target in ONE transaction (`db/seed-fast.ts`, ~12 statements, ~7 s). seq/server_seq are
   reassigned by the target, so cursors only move forward. Devices rows are seeded directly
   (freshness only, not a projection).
-- Office: online only, polling (no push); the snapshot loads all open tasks + 30 days of closed
+- Office: online only, polling (push only for alerts); the snapshot loads all open tasks + 30 days of closed
   ones (fine for a branch, not for thousands of tasks). Stats are computed live, not cached.
 - Office photo check counts only uploaded photos: a photo still on the phone does not unlock
   Closeout yet.

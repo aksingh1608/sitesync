@@ -14,6 +14,7 @@ import { asc, getTableColumns, sql } from "drizzle-orm";
 import type { PgTable } from "drizzle-orm/pg-core";
 import { drizzle } from "drizzle-orm/pglite";
 import { migrate } from "drizzle-orm/pglite/migrator";
+import { describeError, isTransientDbError, withTransientRetry } from "../lib/db/errors";
 import * as s from "../lib/db/schema";
 import type { Db } from "../lib/sync/store-drizzle";
 import { seed, type SeedSummary } from "./seed-data";
@@ -80,5 +81,41 @@ export async function seedViaMemory(target: Db, opts: { now?: Date } = {}): Prom
     return { ...summary, statements };
   } finally {
     await client.close();
+  }
+}
+
+/**
+ * Reseed with one automatic retry on a transient connection error (for the CLI
+ * and the Day 6 reset button). Each attempt opens a FRESH connection; the copy
+ * is one transaction, so a failed attempt left the target untouched. Every
+ * failure is logged in full (cause chain, per-address connect errors).
+ */
+export async function reseedWithRetry(
+  open: () => { db: Db; close: () => Promise<void> },
+  opts: { now?: Date; retries?: number; delayMs?: number; log?: (msg: string) => void } = {},
+): Promise<SeedSummary & { statements: number; attempts: number }> {
+  const log = opts.log ?? ((m: string) => console.error(m));
+  let attempts = 0;
+  try {
+    const out = await withTransientRetry(
+      async () => {
+        attempts++;
+        const { db, close } = open();
+        try {
+          return await seedViaMemory(db, { now: opts.now });
+        } finally {
+          await close().catch((e) => log(`[seed] closing the connection failed:\n${describeError(e)}`));
+        }
+      },
+      {
+        retries: opts.retries ?? 1,
+        delayMs: opts.delayMs ?? 1500,
+        onRetry: (err) => log(`[seed] attempt ${attempts} hit a transient database error; retrying once:\n${describeError(err)}`),
+      },
+    );
+    return { ...out, attempts };
+  } catch (err) {
+    log(`[seed] failed after ${attempts} attempt(s) (${isTransientDbError(err) ? "transient" : "not transient, not retried"}):\n${describeError(err)}`);
+    throw err;
   }
 }

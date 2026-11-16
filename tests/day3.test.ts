@@ -172,3 +172,53 @@ describe("devices (office freshness)", () => {
     expect(out.response.cursor).toBe("0");
   });
 });
+
+describe("office status changes on any task (Part A item 3)", () => {
+  const status = (actorId: string, taskId: string, to: string, minute: number, reason?: string) =>
+    event({ type: "task.status_changed", actorId, clientTs: ts(minute), payload: { taskId, to, ...(reason ? { reason } : {}) } } as never);
+  const statusOf = async (id: string) => (await db.select().from(tasks).where(eq(tasks.id, id)))[0].status;
+
+  /** A technician's own to-do: created by and assigned to techA (the coordinator is neither). */
+  async function techTask() {
+    const id = uuid();
+    expect((await sync(db, ids.techA, [taskCreated(ids.techA, id, ts(0), { assigneeId: ids.techA })])).rejected).toEqual([]);
+    return id;
+  }
+
+  it("lets a coordinator cancel and reopen a task that is neither theirs nor created by them", async () => {
+    const id = await techTask();
+    expect(reasons(await sync(db, ids.coordinator, [status(ids.coordinator, id, "cancelled", 1, "Duplicate")]))).toEqual([]);
+    expect(await statusOf(id)).toBe("cancelled");
+    expect(reasons(await sync(db, ids.coordinator, [status(ids.coordinator, id, "open", 2)]))).toEqual([]);
+    expect(await statusOf(id)).toBe("open");
+  });
+
+  it("lets a manager move any task through allowed transitions (done -> reopen)", async () => {
+    const id = uuid();
+    await sync(db, ids.coordinator, [taskCreated(ids.coordinator, id, ts(0), { assigneeId: ids.techB })]);
+    for (const [to, m] of [["in_progress", 1], ["blocked", 2], ["done", 3], ["open", 4]] as const) {
+      expect(reasons(await sync(db, ids.manager, [status(ids.manager, id, to, m)])), to).toEqual([]);
+    }
+    expect(await statusOf(id)).toBe("open");
+    // Transition rules still apply to the office: a done task can only be reopened.
+    await sync(db, ids.manager, [status(ids.manager, id, "done", 5)]);
+    expect(reasons(await sync(db, ids.manager, [status(ids.manager, id, "blocked", 6)]))[0]).toMatch(/^invalid_transition/);
+  });
+
+  it("an older field event cannot reopen a task the office cancelled", async () => {
+    const id = await techTask();
+    await sync(db, ids.coordinator, [status(ids.coordinator, id, "cancelled", 5, "Customer cancelled")]);
+    expect(reasons(await sync(db, ids.techA, [status(ids.techA, id, "in_progress", 3)]))[0]).toMatch(/^stale_event/);
+    expect(await statusOf(id)).toBe("cancelled");
+  });
+
+  it("keeps the Day 2 rule for everyone else: HR, and a creator who is not the assignee", async () => {
+    const id = await techTask();
+    expect(reasons(await sync(db, hr, [status(hr, id, "cancelled", 1, "x")]))).toEqual(["forbidden"]);
+    // techA raises a material request for the coordinator, then tries to close it.
+    const req = uuid();
+    await sync(db, ids.techA, [taskCreated(ids.techA, req, ts(0), { assigneeId: ids.coordinator, kind: "material_request" })]);
+    expect(reasons(await sync(db, ids.techA, [status(ids.techA, req, "cancelled", 1)]))).toEqual(["forbidden"]);
+    expect(reasons(await sync(db, ids.coordinator, [status(ids.coordinator, req, "cancelled", 2, "Have stock")]))).toEqual([]);
+  });
+});

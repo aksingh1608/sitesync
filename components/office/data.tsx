@@ -43,7 +43,9 @@ export function usePolling<T>(url: string | null, ms = OFFICE_POLL_MS) {
             ? "Access code needed: reload the page"
             : body.error === "pick_a_person"
               ? "Pick a person at the top"
-              : `HTTP ${res.status}${body.error ? `: ${body.error}` : ""}`,
+              : res.status === 503
+                ? "Database briefly unavailable, retrying"
+                : `HTTP ${res.status}${body.error ? `: ${body.error}` : ""}`,
         );
       }
       const json = (await res.json()) as T;
@@ -156,7 +158,11 @@ export async function sendEvents(actorId: string, drafts: EventDraft[]): Promise
       body: JSON.stringify({ deviceId, actorId, cursor: null, events: evs, appVersion: APP_VERSION, pull: false }),
     });
     const body = (await res.json().catch(() => ({}))) as { rejected?: { reason: string }[]; error?: string };
-    if (!res.ok) return { ok: false, error: res.status === 401 ? "Access code needed: reload the page" : `Server error (${body.error ?? res.status})` };
+    if (!res.ok) {
+      if (res.status === 401) return { ok: false, error: "Access code needed: reload the page" };
+      if (res.status === 503) return { ok: false, error: "The database didn't answer. Nothing was changed; try again in a few seconds." };
+      return { ok: false, error: `Server error (${body.error ?? res.status})` };
+    }
     if (body.rejected?.length) return { ok: false, error: reasonText(body.rejected[0].reason) };
     return { ok: true };
   } catch {

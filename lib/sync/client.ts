@@ -43,6 +43,7 @@ export class HttpError extends Error {
   constructor(
     public status: number,
     message: string,
+    public retryable = status >= 500,
   ) {
     super(message);
   }
@@ -59,7 +60,15 @@ const httpTransport: Transport = async (req) => {
   if (res.status === 401) throw new HttpError(401, "Access code needed: reload the app and enter it");
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new HttpError(res.status, `HTTP ${res.status}: ${text.slice(0, 300)}`);
+    let retryable = res.status >= 500;
+    try {
+      retryable = (JSON.parse(text) as { retryable?: boolean }).retryable ?? retryable;
+    } catch {
+      // not JSON (e.g. a proxy error page)
+    }
+    // Never a rejection: the events stay in the outbox and go out again with backoff.
+    const msg = res.status === 503 && retryable ? "HTTP 503: server temporarily unavailable, will retry" : `HTTP ${res.status}: ${text.slice(0, 300)}`;
+    throw new HttpError(res.status, msg, retryable);
   }
   return (await res.json()) as WireSyncResponse;
 };

@@ -89,7 +89,7 @@ function ReviewRow({ e, now, who, where, canReview, actorId, onChange }: { e: En
       <div className="min-w-60 flex-1">
         <div className="font-medium">{who} · {fmtDay(e.clockInAt)}</div>
         <div className="text-xs text-muted-foreground">
-          {where} · {fmtTime(e.clockInAt)}–{e.clockOutAt ? fmtTime(e.clockOutAt) : "no clock-out"} · {entryHours(e, now).toFixed(1)} h
+          {where} · {fmtTime(e.clockInAt)}–{e.clockOutAt ? fmtTime(e.clockOutAt) : "no clock-out"} · {((h) => (h === null ? "hours unknown" : `${h.toFixed(1)} h`))(entryHours(e, now))}
           {e.clockInDistanceM !== null && ` · ${Math.round(e.clockInDistanceM)} m from site at clock-in`}
           {!e.safetyCheckDone && " · safety check not done"}
         </div>
@@ -128,7 +128,7 @@ function Week({ data }: { data: Data }) {
           <div key={person} className="overflow-x-auto rounded-lg border">
             <div className="flex items-baseline justify-between bg-muted/60 px-2 py-1.5 text-sm">
               <span className="font-medium">{person}</span>
-              <span className="tabular-nums text-muted-foreground">{list.reduce((n, r) => n + r.hours, 0).toFixed(2)} h</span>
+              <span className="tabular-nums text-muted-foreground">{list.reduce((n, r) => n + (r.hours ?? 0), 0).toFixed(2)} h{list.some((r) => r.hours === null) && " + unknown"}</span>
             </div>
             <table className="w-full text-sm">
               <thead className="text-left text-xs text-muted-foreground">
@@ -151,7 +151,7 @@ function Week({ data }: { data: Data }) {
                     <td className="max-w-56 truncate px-2 py-1">{r.site}</td>
                     <td className="px-2 py-1 whitespace-nowrap">{r.clockIn}</td>
                     <td className="px-2 py-1 whitespace-nowrap">{r.clockOut || <span className="text-amber-700">open</span>}</td>
-                    <td className="px-2 py-1 text-right tabular-nums">{r.hours.toFixed(2)}</td>
+                    <td className="px-2 py-1 text-right tabular-nums">{r.hours === null ? <span title="Missing clock-out: hours unknown">?</span> : r.hours.toFixed(2)}</td>
                     <td className="px-2 py-1 text-right tabular-nums">{r.distanceM === null ? "no location" : `${r.distanceM} m`}</td>
                     <td className="px-2 py-1">{r.safety ? "✓" : <span className="text-red-700">not done</span>}</td>
                     <td className="px-2 py-1">{r.flags.map((f) => <Pill key={f} tone="amber" className="mr-1">{f}</Pill>)}</td>

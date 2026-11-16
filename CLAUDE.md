@@ -27,8 +27,9 @@ instruction reached the worker (receipt chain: sent → delivered → seen → a
 
 ## Stack (versions verified 2026-11-15)
 
-- Node 24 (`.nvmrc`). On this machine `~/.local/bin/node` is v20 and shadows nvm; use
-  `export PATH=$HOME/.nvm/versions/node/v24.21.0/bin:$PATH`.
+- **Node 24** (`.nvmrc` = 24, `package.json` engines `24.x`, which Vercel also reads; `.npmrc`
+  sets `engine-strict`). On this machine `~/.local/bin/node` is v20 and shadows nvm; use
+  `export PATH=$HOME/.nvm/versions/node/v24.21.0/bin:$PATH` (a Node 20 `next dev` was flaky).
 - pnpm 12, **TypeScript 6.0.3** (strict). Not TS 7: TS 7 has no JS compiler API and
   typescript-eslint requires `<6.1`.
 - Next.js 16.4 App Router, Turbopack. `cacheComponents` is **off** (Serwist route needs
@@ -122,6 +123,22 @@ note on the site, else `photo_required`; sets `sites.stage_changed_at`), `time.a
 `time.rejected { reason }` (HR/manager only; the later decision by clientTs wins; an open entry
 can be rejected but not approved). Columns: `tasks.material_status(_at)`, `sites.stage_changed_at`,
 `time_entries.review_status/reviewed_by/reviewed_at/review_reason`.
+
+## Transient database errors (Day 3)
+
+`lib/db/errors.ts`: `isTransientDbError` (net codes, AggregateError of per-address connect errors,
+ws `ErrorEvent`, Postgres 08xxx/57P0x; never constraint or syntax errors), `describeError` (full
+cause chain for logs; a ws ErrorEvent otherwise logs as `{}`), `withTransientRetry` (one retry,
+fresh Pool per attempt; only for work that is safe to repeat).
+- `POST /api/sync` (`lib/sync/http.ts` `handleSync`): one server-side retry (the transaction
+  rolled back; events are idempotent by id), then **503 `{ error: "db_unavailable", retryable:
+  true }` + Retry-After**. The client treats it as a failed attempt: outbox items stay `pending`
+  (attempts + lastError), exponential backoff, never `rejected`.
+- Office reads, `/office` layout (readable "can't reach the database" page instead of a crash),
+  `/api/people`, `GET /api/media/[noteId]`: one retry, then 503.
+- `db:seed` / `db:migrate` (`reseedWithRetry` in `db/seed-fast.ts`, reused by the Day 6 reset
+  button): one retry on a fresh connection, full error log on any failure. Reproduced locally:
+  the Neon WebSocket sometimes fails to open (bare ErrorEvent); the retry recovered every time.
 
 ## Office dashboard (/office, Day 3)
 
@@ -254,6 +271,8 @@ pnpm db:migrate    # applies db/migrations to DATABASE_URL (.env.local)
 pnpm db:seed       # wipes + reseeds demo data in ~7 s (clients: /debug → Reset local data)
 pnpm db:studio
 pnpm icons         # regenerate placeholder icons
+CODE=… BASE=http://localhost:3100 pnpm e2e:office   # headless Playwright: /office per role +
+                   # two-context receipt test; screenshots in /tmp/sitesync-office (creates 1 task)
 ```
 
 Secrets only in `.env.local` (gitignored). `.env.example` lists every key:
@@ -311,5 +330,9 @@ later-day keys.
   ones (fine for a branch, not for thousands of tasks). Stats are computed live, not cached.
 - Office photo check counts only uploaded photos: a photo still on the phone does not unlock
   Closeout yet.
-- This dev machine has a flaky route to Neon (TCP timeouts, no IPv6): occasional 500s locally
-  that retry fine; run the dev server with Node 24 (a Node 20 `next dev` was worse).
+- This dev machine has a slow, flaky route to Neon (~200 ms RTT, TCP timeouts, no IPv6): a sync
+  takes 3-5 s locally and some requests 503 even after the retry. Receipt latency on the
+  dashboard measured locally at 10-14 s for that reason (5 s poll + slow syncs); on Vercel next
+  to Neon it should be ~poll interval. Local timings are not representative.
+- Missing clock-out (open > 14 h): hours are unknown (`entryHours` = null), shown as "?" and left
+  out of totals and the CSV hours column.

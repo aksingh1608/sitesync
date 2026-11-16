@@ -14,7 +14,8 @@
     "db:migrate": "tsx db/migrate.ts",
     "db:seed": "tsx db/seed.ts",
     "db:studio": "drizzle-kit studio",
-    "icons": "tsx scripts/gen-icons.ts"
+    "icons": "tsx scripts/gen-icons.ts",
+    "e2e:office": "node scripts/e2e-office.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",
@@ -51,6 +52,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.4.6",
     "fake-indexeddb": "^6.2.8",
+    "playwright-core": "1.49.1",
     "tailwindcss": "4.3.3",
     "tsx": "^4.23.15",
     "typescript": "6.0.3",
@@ -58,6 +60,6 @@
   },
   "packageManager": "pnpm@12.18.0",
   "engines": {
-    "node": ">=24"
+    "node": "24.x"
   }
 }

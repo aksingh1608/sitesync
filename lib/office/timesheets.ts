@@ -24,7 +24,8 @@ export type TimesheetRow = {
   site: string;
   clockIn: string;
   clockOut: string;
-  hours: number;
+  /** Null when unknown (missing clock-out). */
+  hours: number | null;
   distanceM: number | null;
   safety: boolean;
   flags: string[];
@@ -48,7 +49,7 @@ export function timesheetRows(
       site: site.get(e.siteId) ?? e.siteId,
       clockIn: clock(e.clockInAt),
       clockOut: e.clockOutAt ? clock(e.clockOutAt) : "",
-      hours: Math.round(entryHours(e, now) * 100) / 100,
+      hours: ((h) => (h === null ? null : Math.round(h * 100) / 100))(entryHours(e, now)),
       distanceM: e.clockInDistanceM === null ? null : Math.round(e.clockInDistanceM),
       safety: e.safetyCheckDone,
       flags: entryFlags(e, now).map((f) => FLAG_LABEL[f]),
@@ -78,7 +79,7 @@ export function timesheetCsv(data: Parameters<typeof timesheetRows>[0] & { weekK
     r.site,
     r.clockIn,
     r.clockOut || "(open)",
-    r.hours.toFixed(2),
+    r.hours === null ? "" : r.hours.toFixed(2),
     r.distanceM,
     r.safety ? "yes" : "no",
     r.flags.join("; "),

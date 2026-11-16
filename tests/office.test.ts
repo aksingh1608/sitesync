@@ -11,6 +11,7 @@ import {
   agoLabel,
   behindSchedule,
   entryFlags,
+  entryHours,
   median,
   needsReview,
   receiptStage,
@@ -61,6 +62,13 @@ describe("rules", () => {
     expect(behindSchedule({ rolloutStage: "install", stageChangedAt: daysAgo(6) }, NOW).behind).toBe(false);
     expect(behindSchedule({ rolloutStage: "done", stageChangedAt: daysAgo(90) }, NOW).behind).toBe(false);
     expect(rolloutProgress(["done", "done", "survey", "install"], ROLLOUT_STAGES)).toMatchObject({ done: 2, total: 4 });
+  });
+
+  it("never counts hours for a forgotten clock-out", () => {
+    const at = (h: number) => new Date(NOW.getTime() - h * 60 * MIN);
+    expect(entryHours({ clockInAt: at(3), clockOutAt: null }, NOW)).toBeCloseTo(3); // shift still running
+    expect(entryHours({ clockInAt: at(39), clockOutAt: null }, NOW)).toBeNull(); // missing clock-out
+    expect(entryHours({ clockInAt: at(10), clockOutAt: at(2) }, NOW)).toBeCloseTo(8);
   });
 
   it("finds timesheet problems", () => {
@@ -150,6 +158,7 @@ describe("server queries (seeded)", () => {
     expect(flagged).toEqual([P.aisha, P.grace, P.tom].sort());
     const rows = timesheetRows(t, NOW);
     expect(rows.find((r) => r.person === "Aisha Bello")?.flags).toEqual(["Too far from site"]);
+    expect(rows.find((r) => r.person === "Tom Reyes")?.hours).toBeNull(); // forgotten clock-out: unknown
     const csv = timesheetCsv(t, NOW);
     expect(csv.startsWith("﻿Person,Date,Site")).toBe(true);
     expect(csv.split("\r\n").filter(Boolean)).toHaveLength(rows.length + 1);

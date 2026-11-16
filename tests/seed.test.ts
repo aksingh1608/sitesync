@@ -4,7 +4,7 @@ import { drizzle } from "drizzle-orm/pglite";
 import { migrate } from "drizzle-orm/pglite/migrator";
 import { describe, expect, it } from "vitest";
 import { SEED_IDS, SEED_TASK_ID, seed } from "@/db/seed-data";
-import { COPY_TABLES, seedViaMemory } from "@/db/seed-fast";
+import { COPY_TABLES, reseedWithRetry, seedViaMemory } from "@/db/seed-fast";
 import { BRANCH_TIMEZONE } from "@/lib/config";
 import { events, taskReceipts, tasks, timeEntries } from "@/lib/db/schema";
 import { groupTasks } from "@/lib/tasks/grouping";
@@ -136,3 +136,42 @@ async function samGroups(db: Parameters<typeof seed>[0], now: Date) {
   const rows = await db.select().from(tasks).where(eq(tasks.assigneeId, SEED_IDS.people.sam));
   return groupTasks(rows, now, BRANCH_TIMEZONE);
 }
+
+describe("reseedWithRetry", () => {
+  it("retries once on a transient connection error with a fresh connection, and logs it in full", async () => {
+    const client = new PGlite();
+    const real = drizzle({ client });
+    await migrate(real, { migrationsFolder: "./db/migrations" });
+    const logs: string[] = [];
+    let opens = 0;
+    const out = await reseedWithRetry(
+      () => {
+        opens++;
+        if (opens === 1) {
+          // First connection: the transaction fails like Neon did (wrapped connect timeout).
+          const broken = {
+            transaction: async () => {
+              const cause = Object.assign(new Error("connect ETIMEDOUT 3.14.138.241:443"), { code: "ETIMEDOUT" });
+              throw new Error("Failed query: TRUNCATE events", { cause });
+            },
+          } as unknown as Parameters<typeof seed>[0];
+          return { db: broken, close: async () => {} };
+        }
+        return { db: real, close: async () => {} };
+      },
+      { now: new Date("2026-11-11T16:00:00Z"), delayMs: 0, log: (m) => logs.push(m) },
+    );
+    expect(out).toMatchObject({ attempts: 2, tasks: 33 });
+    expect(opens).toBe(2);
+    expect(logs.join("\n")).toMatch(/retrying once[\s\S]*code=ETIMEDOUT/);
+    await client.close();
+  });
+
+  it("does not retry a non-transient failure, and logs it", async () => {
+    const logs: string[] = [];
+    const broken = { transaction: async () => Promise.reject(new Error("relation \"events\" does not exist")) } as unknown as Parameters<typeof seed>[0];
+    await expect(reseedWithRetry(() => ({ db: broken, close: async () => {} }), { delayMs: 0, log: (m) => logs.push(m) })).rejects.toThrow();
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatch(/failed after 1 attempt\(s\) \(not transient[\s\S]*does not exist/);
+  });
+});

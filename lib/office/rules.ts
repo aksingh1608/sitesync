@@ -115,9 +115,16 @@ type EntryLike = {
   reviewStatus: "approved" | "rejected" | null;
 };
 
-export function entryHours(e: EntryLike, now: Date): number {
-  const end = time(e.clockOutAt) ?? now.getTime();
-  return Math.max(0, end - time(e.clockInAt)!) / HOUR;
+/**
+ * Worked hours. An open entry counts up to now while the shift is plausibly
+ * running; once it is a missing clock-out the hours are unknown (null), so a
+ * forgotten clock-out never inflates a timesheet.
+ */
+export function entryHours(e: Pick<EntryLike, "clockInAt" | "clockOutAt">, now: Date): number | null {
+  const start = time(e.clockInAt)!;
+  const end = time(e.clockOutAt);
+  if (end === null && now.getTime() - start > MISSING_CLOCK_OUT_HOURS * HOUR) return null;
+  return Math.max(0, (end ?? now.getTime()) - start) / HOUR;
 }
 
 export type EntryFlag = "outside_geofence" | "no_location" | "missing_clock_out";

@@ -5,6 +5,7 @@
 import { eq, inArray } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 import { fieldNotes, people } from "@/lib/db/schema";
+import { describeError, withTransientRetry } from "@/lib/db/errors";
 import { withDb } from "@/lib/db/server";
 import { canViewNote } from "@/lib/media/record";
 import { readMedia } from "@/lib/media/store";
@@ -32,13 +33,13 @@ export async function GET(request: NextRequest, ctx: RouteContext<"/api/media/[n
   if (!actorIds.length) return text(401, "pick a person first");
 
   try {
-    const found = await withDb(async (db) => {
+    const found = await withTransientRetry(() => withDb(async (db) => {
       const [actors, [note]] = await Promise.all([
         db.select().from(people).where(inArray(people.id, actorIds)),
         db.select().from(fieldNotes).where(eq(fieldNotes.id, noteId)),
       ]);
       return { actors, note };
-    });
+    }));
     if (!found.actors.length) return text(401, "unknown actor");
     const note = found.note;
     // Same answer for "missing" and "not yours", so ids can't be probed.
@@ -71,7 +72,7 @@ export async function GET(request: NextRequest, ctx: RouteContext<"/api/media/[n
       headers: { ...headers, "content-range": `bytes ${start}-${end}/${size}`, "content-length": String(end - start + 1) },
     });
   } catch (err) {
-    console.error("[api/media/:noteId] failed", err);
+    console.error(`[api/media/:noteId] failed:\n${describeError(err)}`);
     return text(500, "internal_error");
   }
 }

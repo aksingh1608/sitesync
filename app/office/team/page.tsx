@@ -9,6 +9,8 @@ import type { TeamStats } from "@/lib/office/queries";
 import { addDays, dayKey } from "@/lib/time";
 
 const STATS_POLL_MS = 60_000; // aggregates change slowly
+// Explicit colours: this theme's --chart-* tokens are greys, which made Overdue and Blocked unreadable.
+const C = { completed: "#2563eb", ack: "#0d9488", overdue: "#f59e0b", blocked: "#dc2626" };
 
 export default function TeamPage() {
   const today = dayKey(new Date(), BRANCH_TIMEZONE);
@@ -60,7 +62,7 @@ export default function TeamPage() {
                 <XAxis dataKey="label" fontSize={11} interval="preserveStartEnd" />
                 <YAxis allowDecimals={false} fontSize={11} width={28} />
                 <Tooltip />
-                <Line type="monotone" dataKey="completed" name="Completed" stroke="var(--chart-1)" strokeWidth={2} dot={false} />
+                <Line type="monotone" dataKey="completed" name="Completed" stroke={C.completed} strokeWidth={2} dot={false} />
               </LineChart>
             </Chart>
             <Chart title="Completed per person">
@@ -69,7 +71,7 @@ export default function TeamPage() {
                 <XAxis dataKey="name" fontSize={11} />
                 <YAxis allowDecimals={false} fontSize={11} width={28} />
                 <Tooltip />
-                <Bar dataKey="completed" name="Completed" fill="var(--chart-2)" />
+                <Bar dataKey="completed" name="Completed" fill={C.completed} />
               </BarChart>
             </Chart>
             <Chart title="Median minutes from sent to acknowledged">
@@ -78,7 +80,7 @@ export default function TeamPage() {
                 <XAxis dataKey="name" fontSize={11} />
                 <YAxis fontSize={11} width={36} />
                 <Tooltip />
-                <Bar dataKey="medianAckMin" name="Median minutes" fill="var(--chart-3)" />
+                <Bar dataKey="medianAckMin" name="Median minutes" fill={C.ack} />
               </BarChart>
             </Chart>
             <Chart title="Overdue and blocked per site">
@@ -88,8 +90,8 @@ export default function TeamPage() {
                 <YAxis allowDecimals={false} fontSize={11} width={28} />
                 <Tooltip />
                 <Legend wrapperStyle={{ fontSize: 12 }} />
-                <Bar dataKey="overdue" name="Overdue" stackId="a" fill="var(--chart-4)" />
-                <Bar dataKey="blocked" name="Blocked" stackId="a" fill="var(--chart-5)" />
+                <Bar dataKey="overdue" name="Overdue" stackId="a" fill={C.overdue} />
+                <Bar dataKey="blocked" name="Blocked" stackId="a" fill={C.blocked} />
               </BarChart>
             </Chart>
           </div>

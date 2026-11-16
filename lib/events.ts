@@ -3,8 +3,10 @@
 import { z } from "zod";
 import {
   LOCATION_ERRORS,
+  MATERIAL_STATUSES,
   MAX_MEDIA_BYTES,
   NOTE_KINDS,
+  ROLLOUT_STAGES,
   TASK_KINDS,
   TASK_PRIORITIES,
   TASK_SOURCES,
@@ -119,6 +121,31 @@ export const NoteMediaUploadedPayload = z.strictObject({
   durationSec: z.number().nonnegative().max(60 * 60).optional(),
 });
 
+/** Office: progress a material request (approved -> ordered -> delivered, forward only). */
+export const MaterialStatusChangedPayload = z.strictObject({
+  taskId: id,
+  to: z.enum(MATERIAL_STATUSES),
+  note: z.string().max(1000).optional(),
+});
+
+/**
+ * Office: move a rollout store to another stage. `from` is the stage the sender
+ * saw, so a move based on a stale board is rejected instead of silently applied.
+ */
+export const SiteStageChangedPayload = z
+  .strictObject({
+    siteId: id,
+    from: z.enum(ROLLOUT_STAGES),
+    to: z.enum(ROLLOUT_STAGES),
+    note: z.string().max(1000).optional(),
+  })
+  .refine((p) => p.from !== p.to, "from and to must differ");
+
+/** HR: approve a time entry. */
+export const TimeApprovedPayload = z.strictObject({ timeEntryId: id });
+/** HR: reject a time entry. A reason is required (the worker and payroll see it). */
+export const TimeRejectedPayload = z.strictObject({ timeEntryId: id, reason: z.string().trim().min(1).max(1000) });
+
 const ev = <T extends string, P extends z.ZodType>(type: T, payload: P) =>
   z.strictObject({ ...envelope, type: z.literal(type), payload });
 
@@ -134,6 +161,10 @@ export const EventSchema = z.discriminatedUnion("type", [
   ev("status.set", StatusSetPayload),
   ev("note.created", NoteCreatedPayload),
   ev("note.media_uploaded", NoteMediaUploadedPayload),
+  ev("material.status_changed", MaterialStatusChangedPayload),
+  ev("site.stage_changed", SiteStageChangedPayload),
+  ev("time.approved", TimeApprovedPayload),
+  ev("time.rejected", TimeRejectedPayload),
 ]);
 
 /** A validated event (defaults applied). */

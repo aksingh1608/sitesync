@@ -24,6 +24,12 @@ export function dexieStore(db: LocalDb): SyncStore {
     putTimeEntry: async (row) => void (await db.timeEntries.put(row)),
     putStatusUpdate: async (row) => void (await db.statusUpdates.put(row)),
     putNote: async (row) => void (await db.fieldNotes.put(row)),
+    putSite: async (row) => void (await db.sites.put(row)),
+    // Pulled notes carry mediaUrl (never the blob path): set once the blob is uploaded.
+    countPhotoNotes: (siteId) =>
+      db.fieldNotes
+        .filter((n) => n.siteId === siteId && n.kind === "photo" && !!(n as { mediaUrl?: string | null }).mediaUrl)
+        .count(),
     touchSite: async () => {},
     // Revocations are decided by the server and arrive with the next pull.
     revoke: async () => {},

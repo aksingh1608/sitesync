@@ -14,6 +14,13 @@ export const REQUEST_TASK_KINDS: readonly TaskKind[] = ["material_request", "fol
 export const OFFICE_ROLES: readonly Role[] = ["coordinator", "hr", "manager"];
 export const FIELD_ROLES: readonly Role[] = ["technician", "foreman"];
 export const isOfficeRole = (role: Role) => OFFICE_ROLES.includes(role);
+export const isFieldRole = (role: Role) => FIELD_ROLES.includes(role);
+
+/** Roles that may approve / reject timesheets (coordinators may only view them). */
+export const TIME_REVIEW_ROLES: readonly Role[] = ["hr", "manager"];
+export const canReviewTime = (role: Role) => TIME_REVIEW_ROLES.includes(role);
+/** Roles that may move rollout stores between stages and progress material requests. */
+export const canManageRollouts = (role: Role) => canManageTasks(role);
 
 export const TRADES = ["electrical", "lighting", "signs", "ev", "general"] as const;
 export type Trade = (typeof TRADES)[number];
@@ -30,6 +37,16 @@ export const ROLLOUT_STAGES = [
   "done",
 ] as const;
 export type RolloutStage = (typeof ROLLOUT_STAGES)[number];
+/** A store cannot enter these stages without at least one uploaded photo note on the site. */
+export const PHOTO_REQUIRED_STAGES: readonly RolloutStage[] = ["closeout", "done"];
+
+/** Material request progress after it was raised (null = requested). Forward only. */
+export const MATERIAL_STATUSES = ["approved", "ordered", "delivered"] as const;
+export type MaterialStatus = (typeof MATERIAL_STATUSES)[number];
+
+/** HR decision on a time entry (null = not reviewed yet). */
+export const TIME_REVIEW_STATUSES = ["approved", "rejected"] as const;
+export type TimeReviewStatus = (typeof TIME_REVIEW_STATUSES)[number];
 
 export const TASK_KINDS = ["task", "follow_up", "service_call", "material_request"] as const;
 export type TaskKind = (typeof TASK_KINDS)[number];

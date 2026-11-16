@@ -4,7 +4,7 @@
 // through processSync, i.e. the same validation and reducers as real clients.
 // IDs are fixed. Dates are relative to "now" so Today / This Week stay useful.
 import { sql } from "drizzle-orm";
-import { branches, people, rollouts, sites } from "../lib/db/schema";
+import { branches, devices, people, rollouts, sites } from "../lib/db/schema";
 import type { SyncEventInput } from "../lib/events";
 import type { RolloutStage, TaskKind, TaskPriority, TaskStatus } from "../lib/domain";
 import { offsetNorth } from "../lib/geo";
@@ -53,6 +53,9 @@ const PEOPLE = [
 
 const HOSPITAL = { lat: 40.7163, lng: -73.803 };
 const STORE = { lat: 40.6806, lng: -73.996 };
+
+/** Days each store has been in its current stage (some are past ROLLOUT_STAGE_EXPECTED_DAYS). */
+const STAGE_DAYS: Record<number, number> = { 1: 20, 2: 15, 3: 2, 4: 6, 5: 3, 6: 9, 7: 2, 8: 7, 9: 1, 10: 2, 11: 1, 12: 5 };
 
 const ROLLOUT_STORES: { n: number; area: string; address: string; lat: number; lng: number; stage: RolloutStage }[] = [
   { n: 1, area: "Flushing", address: "41-17 Main Street Plaza, Flushing, NY 11355", lat: 40.759, lng: -73.8303, stage: "done" },
@@ -129,6 +132,10 @@ const TASKS: TaskSpec[] = [
   { n: 29, assignee: P.grace, site: rolloutSite(5), title: "QA check, Store #105 install", due: [0, 12, 0], receipt: "ack", createdDaysAgo: 2 },
   { n: 30, assignee: P.grace, site: rolloutSite(8), title: "Schedule crews for Stores #108-#110", due: [6, 9, 0], receipt: "delivered", createdDaysAgo: 2, createdBy: P.marcus },
   { n: 31, assignee: P.grace, site: rolloutSite(1), title: "Assemble closeout docs for completed stores", priority: "low", due: [25, 12, 0], receipt: "sent", createdDaysAgo: 1 },
+
+  // Material requests from the field to the coordinator (office queue).
+  { n: 32, assignee: P.dana, site: H, title: "Material: 2 reels of 4/0 copper for LP-3B", kind: "material_request", priority: "high", due: [1, 9, 0], receipt: "seen", createdBy: P.sam, createdDaysAgo: 0.2 },
+  { n: 33, assignee: P.dana, site: rolloutSite(4), title: "Material: 6 replacement troffer lenses, Store #104", kind: "material_request", due: [3, 12, 0], receipt: "ack", createdBy: P.aisha, createdDaysAgo: 2 },
 ];
 
 export const SEED_TASK_ID = (n: number) => uid(0x5, n);
@@ -148,7 +155,7 @@ export async function seed(db: Db, opts: { now?: Date } = {}): Promise<SeedSumma
   // 1. Wipe. sync_seq is deliberately NOT restarted: cursors only move forward.
   await db.execute(sql`
     TRUNCATE events, field_notes, status_updates, time_entries, task_receipts, escalations,
-      push_subscriptions, digests, tasks, sites, rollouts, people, branches
+      push_subscriptions, digests, revocations, devices, tasks, sites, rollouts, people, branches
     RESTART IDENTITY CASCADE`);
 
   // 2. Reference data.
@@ -191,6 +198,7 @@ export async function seed(db: Db, opts: { now?: Date } = {}): Promise<SeedSumma
       geofenceRadiusM: 120,
       rolloutId: SEED_IDS.rollout,
       rolloutStage: s.stage,
+      stageChangedAt: new Date(now.getTime() - STAGE_DAYS[s.n] * DAY),
     })),
   ]);
 
@@ -263,8 +271,16 @@ export async function seed(db: Db, opts: { now?: Date } = {}): Promise<SeedSumma
   // Yesterday: Aisha clocked in ~850 m from Store #106 (the flagged one), Tom on site.
   clockIn(1, P.aisha, rolloutSite(6), local(-1, 7, 10), near(store6, 850), 12);
   clockOut(1, P.aisha, local(-1, 15, 30), near(store6, 20));
+  // Tom forgot to clock out yesterday (shows as "missing clock-out" for HR).
   clockIn(2, P.tom, S, local(-1, 8, 0), near(STORE, 30), 6);
-  clockOut(2, P.tom, local(-1, 16, 15), near(STORE, 25));
+  // Grace, three days ago: location permission denied (flagged, needs HR review).
+  push({
+    type: "time.clock_in",
+    actorId: P.grace,
+    at: local(-3, 7, 30),
+    payload: { timeEntryId: uid(0x6, 6), siteId: rolloutSite(8), lat: null, lng: null, accuracyM: null, safetyCheckDone: true, locationError: "denied" },
+  });
+  push({ type: "time.clock_out", actorId: P.grace, at: local(-3, 14, 45), payload: { timeEntryId: uid(0x6, 6), lat: null, lng: null, locationError: "denied" } });
   clockIn(3, P.grace, rolloutSite(5), local(-2, 7, 45), near(store5, 60), 9);
   clockOut(3, P.grace, local(-2, 15, 0), near(store5, 40));
   // Today: Sam and Luis are on the hospital site now (open entries).
@@ -292,6 +308,14 @@ export async function seed(db: Db, opts: { now?: Date } = {}): Promise<SeedSumma
     },
   });
 
+  // The coordinator already approved the Store #104 lens request.
+  push({
+    type: "material.status_changed",
+    actorId: P.dana,
+    at: new Date(now.getTime() - 20 * HOUR),
+    payload: { taskId: SEED_TASK_ID(33), to: "approved" },
+  });
+
   // Replay in order, one request per run of same-actor events (like real devices).
   for (let i = 0; i < events.length; ) {
     let j = i;
@@ -307,6 +331,16 @@ export async function seed(db: Db, opts: { now?: Date } = {}): Promise<SeedSumma
     }
     i = j;
   }
+
+  // Device freshness for the office board ("last synced X min ago").
+  const ago = (ms: number) => new Date(now.getTime() - ms);
+  await db.insert(devices).values([
+    { id: "seed-phone-sam", personId: P.sam, lastSyncAt: ago(2 * MIN), appVersion: "0.3.0" },
+    { id: "seed-phone-luis", personId: P.luis, lastSyncAt: ago(1 * MIN), appVersion: "0.3.0" },
+    { id: "seed-phone-aisha", personId: P.aisha, lastSyncAt: ago(25 * MIN), appVersion: "0.3.0" },
+    { id: "seed-phone-tom", personId: P.tom, lastSyncAt: ago(3 * HOUR), appVersion: "0.2.0" },
+    { id: "seed-phone-grace", personId: P.grace, lastSyncAt: ago(26 * HOUR), appVersion: "0.3.0" },
+  ]);
 
   return { tasks: TASKS.length, events: events.length, people: PEOPLE.length, sites: 2 + ROLLOUT_STORES.length };
 }

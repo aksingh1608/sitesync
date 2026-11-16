@@ -1,6 +1,6 @@
 // SyncStore backed by Postgres via Drizzle. Every write sets
 // seq = nextval('sync_seq') so the row shows up in the next cursor pull.
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, count, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import {
   fieldNotes,
@@ -90,6 +90,17 @@ export function drizzleStore(db: Db): SyncStore {
         .insert(fieldNotes)
         .values(v)
         .onConflictDoUpdate({ target: fieldNotes.id, set: { ...v, seq: nextSeq } });
+    },
+    putSite: async (row) => {
+      const v = withoutSeq(row);
+      await db.update(sites).set({ ...v, seq: nextSeq }).where(eq(sites.id, row.id));
+    },
+    countPhotoNotes: async (siteId) => {
+      const [r] = await db
+        .select({ n: count() })
+        .from(fieldNotes)
+        .where(and(eq(fieldNotes.siteId, siteId), eq(fieldNotes.kind, "photo"), isNotNull(fieldNotes.blobPath)));
+      return Number(r?.n ?? 0);
     },
     touchSite: async (siteId) => {
       const [site] = await db

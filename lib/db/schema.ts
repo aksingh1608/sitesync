@@ -31,8 +31,10 @@ import {
   TASK_STATUSES,
   TRADES,
   WORKER_STATUSES,
+  type MaterialStatus,
   type RevocableEntity,
   type TaskLwwField,
+  type TimeReviewStatus,
 } from "../domain";
 
 // ---------------------------------------------------------------------------
@@ -126,6 +128,8 @@ export const sites = pgTable(
     geofenceRadiusM: integer("geofence_radius_m").notNull().default(150),
     rolloutId: uuid("rollout_id").references(() => rollouts.id),
     rolloutStage: rolloutStageEnum("rollout_stage"),
+    /** When the store entered its current stage (site.stage_changed); drives "behind schedule". */
+    stageChangedAt: tsz("stage_changed_at"),
     seq: seq(),
   },
   (t) => [index("sites_seq_idx").on(t.seq), index("sites_rollout_idx").on(t.rolloutId)],
@@ -159,6 +163,9 @@ export const tasks = pgTable(
     updatedAt: tsz("updated_at").notNull(),
     /** Winning (clientTs, eventId) per field, for last-write-wins merges. */
     fieldTs: jsonb("field_ts").$type<TaskFieldStamps>().notNull().default({}),
+    /** material_request only: progress after it was raised (null = requested). */
+    materialStatus: text("material_status").$type<MaterialStatus>(),
+    materialStatusAt: tsz("material_status_at"),
     seq: seq(),
   },
   (t) => [
@@ -213,6 +220,11 @@ export const timeEntries = pgTable(
     flagged: boolean("flagged").notNull().default(false),
     flagReason: text("flag_reason"),
     safetyCheckDone: boolean("safety_check_done").notNull().default(false),
+    /** HR review (time.approved / time.rejected). Null = not reviewed yet. */
+    reviewStatus: text("review_status").$type<TimeReviewStatus>(),
+    reviewedBy: uuid("reviewed_by").references(() => people.id),
+    reviewedAt: tsz("reviewed_at"),
+    reviewReason: text("review_reason"),
     seq: seq(),
   },
   (t) => [index("time_entries_seq_idx").on(t.seq), index("time_entries_person_idx").on(t.personId)],
@@ -286,6 +298,24 @@ export const revocations = pgTable(
     uniqueIndex("revocations_actor_entity_idx").on(t.actorId, t.entity, t.entityId),
     index("revocations_seq_idx").on(t.seq),
   ],
+);
+
+/**
+ * One row per device (browser profile) that synced: written by POST /api/sync.
+ * The office shows "last synced X min ago" from it, never a guessed online dot.
+ * Not a projection (office reads it on the server), so no seq.
+ */
+export const devices = pgTable(
+  "devices",
+  {
+    id: text("id").primaryKey(),
+    personId: uuid("person_id")
+      .notNull()
+      .references(() => people.id),
+    lastSyncAt: tsz("last_sync_at").notNull(),
+    appVersion: text("app_version"),
+  },
+  (t) => [index("devices_person_idx").on(t.personId)],
 );
 
 // ---------------------------------------------------------------------------
@@ -402,3 +432,4 @@ export type StatusUpdate = typeof statusUpdates.$inferSelect;
 export type FieldNote = typeof fieldNotes.$inferSelect;
 export type EventRow = typeof events.$inferSelect;
 export type Revocation = typeof revocations.$inferSelect;
+export type Device = typeof devices.$inferSelect;

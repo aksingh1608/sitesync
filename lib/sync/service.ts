@@ -2,7 +2,7 @@
 // -> read changes since the cursor for this actor. All in one transaction.
 import { eq, sql } from "drizzle-orm";
 import { EventSchema, SERVER_ONLY_EVENT_TYPES } from "../events";
-import { events, people } from "../db/schema";
+import { devices, events, people } from "../db/schema";
 import { applyEvent } from "./apply";
 import type { SyncRequest, SyncResponse } from "./protocol";
 import { drizzleStore, type Db } from "./store-drizzle";
@@ -29,6 +29,8 @@ export async function processSync(
     trusted?: boolean;
     /** Skip the cursor pull (server-internal writes don't need one). */
     skipPull?: boolean;
+    /** Record this device's successful sync in `devices` (POST /api/sync only, not seed / server writes). */
+    recordDevice?: boolean;
   } = {},
 ): Promise<SyncOutcome> {
   const now = opts.now ?? (() => new Date());
@@ -113,8 +115,14 @@ export async function processSync(
       }
     }
 
+    if (opts.recordDevice) {
+      const at = now();
+      const row = { personId: actor.id, lastSyncAt: at, appVersion: req.appVersion ?? null };
+      await tx.insert(devices).values({ id: req.deviceId, ...row }).onConflictDoUpdate({ target: devices.id, set: row });
+    }
+
     const cursor = req.cursor === null ? 0 : Number(req.cursor);
-    const pulled = opts.skipPull
+    const pulled = opts.skipPull || req.pull === false
       ? { changes: emptyChanges(), revocations: [], cursor, hasMore: false }
       : await pullChanges(tx, actor, cursor, opts.pageSize);
     return {

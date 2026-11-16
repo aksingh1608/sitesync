@@ -28,6 +28,8 @@ const baseTask: TaskRow = {
   id: "t0000000-0000-4000-8000-000000000001",
   title: "T",
   description: "",
+  materialStatus: null,
+  materialStatusAt: null,
   siteId: "d0000000-0000-4000-8000-000000000001",
   assigneeId: tech.id,
   createdBy: coordinator.id,
@@ -147,6 +149,7 @@ describe("geofence boundary", () => {
     geofenceRadiusM: 100,
     rolloutId: null,
     rolloutStage: null,
+    stageChangedAt: null,
   };
 
   it("treats exactly-at-radius as inside and anything farther as outside", () => {

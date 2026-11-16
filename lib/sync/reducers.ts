@@ -2,8 +2,12 @@
 // state or a rejection. No I/O, no clocks, no randomness. The same functions
 // run on the server (authoritative) and on the client (optimistic apply).
 import {
+  canManageRollouts,
   canManageTasks,
+  canReviewTime,
   isOfficeRole,
+  MATERIAL_STATUSES,
+  PHOTO_REQUIRED_STAGES,
   REQUEST_TASK_KINDS,
   STATUS_TRANSITIONS,
   TASK_LWW_FIELDS,
@@ -137,6 +141,8 @@ export function reduceTaskCreated(
     createdAt: at,
     updatedAt: at,
     fieldTs,
+    materialStatus: null,
+    materialStatusAt: null,
   };
   const receipt: ReceiptRow = {
     taskId: p.taskId,
@@ -326,6 +332,10 @@ export function reduceClockIn(
     flagged,
     flagReason,
     safetyCheckDone: p.safetyCheckDone,
+    reviewStatus: null,
+    reviewedBy: null,
+    reviewedAt: null,
+    reviewReason: null,
   });
 }
 
@@ -419,5 +429,92 @@ export function reduceNoteMediaUploaded(
     mimeType: p.mimeType,
     sizeBytes: p.sizeBytes,
     durationSec: p.durationSec ?? null,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Office (Day 3): material requests, rollout stages, timesheet review
+// ---------------------------------------------------------------------------
+
+/**
+ * Material requests move forward only: (requested) -> approved -> ordered ->
+ * delivered; steps may be skipped. "Delivered" also closes the task (done),
+ * unless a newer status change already decided its status.
+ */
+export function reduceMaterialStatusChanged(
+  task: TaskRow | undefined,
+  ev: EventOf<"material.status_changed">,
+  ctx: { actor: PersonRow },
+): Result<TaskRow> {
+  if (!task) return reject("task_not_found");
+  if (!canManageRollouts(ctx.actor.role)) return forbidden();
+  if (task.kind !== "material_request") return reject("not_a_material_request");
+  if (task.status === "cancelled") return reject("task_cancelled");
+  const to = ev.payload.to;
+  const rank = (m: TaskRow["materialStatus"]) => (m ? MATERIAL_STATUSES.indexOf(m) : -1);
+  if (rank(to) === rank(task.materialStatus)) return ok(task, false); // repeated
+  if (rank(to) < rank(task.materialStatus)) {
+    return reject(`invalid_transition: material ${task.materialStatus} -> ${to}`);
+  }
+  const at = new Date(ev.clientTs);
+  const next: TaskRow = {
+    ...task,
+    materialStatus: to,
+    materialStatusAt: at,
+    updatedAt: at > task.updatedAt ? at : task.updatedAt,
+    fieldTs: { ...task.fieldTs },
+  };
+  const stamp = stampOf(ev);
+  if (to === "delivered" && !TERMINAL_STATUSES.includes(task.status) && isNewer(stamp, task.fieldTs.status)) {
+    next.status = "done";
+    next.fieldTs.status = stamp;
+  }
+  return ok(next);
+}
+
+/**
+ * Move a rollout store to another stage. `from` must match the current stage
+ * (the sender's board was up to date); a repeat of the same move is a no-op.
+ * Closeout (and Done) need at least one uploaded photo note on the site.
+ */
+export function reduceSiteStageChanged(
+  site: SiteRow | undefined,
+  ev: EventOf<"site.stage_changed">,
+  ctx: { actor: PersonRow; photoCount: number },
+): Result<SiteRow> {
+  if (!site) return reject("site_not_found");
+  if (!canManageRollouts(ctx.actor.role)) return forbidden();
+  if (site.kind !== "rollout_store" || !site.rolloutStage) return reject("not_a_rollout_store");
+  const { from, to } = ev.payload;
+  if (site.rolloutStage === to) return ok(site, false);
+  if (site.rolloutStage !== from) return reject(`stage_conflict: store is in ${site.rolloutStage}, not ${from}`);
+  if (PHOTO_REQUIRED_STAGES.includes(to) && ctx.photoCount === 0) {
+    return reject(`photo_required: add at least one photo note on this store before ${to}`);
+  }
+  return ok({ ...site, rolloutStage: to, stageChangedAt: new Date(ev.clientTs) });
+}
+
+/**
+ * HR approves or rejects a time entry. A later decision (by clientTs) replaces
+ * an earlier one; an older one arriving late loses. Open entries can be
+ * rejected (e.g. a missing clock-out) but not approved.
+ */
+export function reduceTimeReviewed(
+  entry: TimeEntryRow | undefined,
+  ev: EventOf<"time.approved" | "time.rejected">,
+  ctx: { actor: PersonRow },
+): Result<TimeEntryRow> {
+  if (!entry) return reject("time_entry_not_found");
+  if (!canReviewTime(ctx.actor.role)) return forbidden();
+  const approve = ev.type === "time.approved";
+  if (approve && entry.clockOutAt === null) return reject("entry_open: no clock-out yet; reject it or wait");
+  const at = new Date(ev.clientTs);
+  if (entry.reviewedAt && at.getTime() <= entry.reviewedAt.getTime()) return ok(entry, false);
+  return ok({
+    ...entry,
+    reviewStatus: approve ? "approved" : "rejected",
+    reviewedBy: ev.actorId,
+    reviewedAt: at,
+    reviewReason: ev.type === "time.rejected" ? ev.payload.reason : null,
   });
 }

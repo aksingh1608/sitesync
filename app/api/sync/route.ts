@@ -25,7 +25,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const outcome = await withDb((db) => processSync(db, parsed.data));
+    const outcome = await withDb((db) => processSync(db, parsed.data, { recordDevice: true }));
     if (!outcome.ok) {
       return NextResponse.json({ error: outcome.error }, { status: outcome.status, headers: noStore });
     }

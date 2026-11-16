@@ -6,6 +6,9 @@ import type { SyncEvent } from "../events";
 import {
   reduceClockIn,
   reduceClockOut,
+  reduceMaterialStatusChanged,
+  reduceSiteStageChanged,
+  reduceTimeReviewed,
   reduceNoteCreated,
   reduceNoteMediaUploaded,
   reduceReceipt,
@@ -37,6 +40,9 @@ export interface SyncStore {
   putTimeEntry(row: TimeEntryRow): Promise<void>;
   putStatusUpdate(row: StatusUpdateRow): Promise<void>;
   putNote(row: FieldNoteRow): Promise<void>;
+  putSite(row: SiteRow): Promise<void>;
+  /** Photo notes on a site whose blob has been uploaded (closeout evidence). */
+  countPhotoNotes(siteId: string): Promise<number>;
   /**
    * A site (and its rollout) just became relevant to someone, e.g. a task on it
    * was assigned to them. Bump its seq so it reaches that person's next pull.
@@ -179,6 +185,33 @@ export async function applyEvent(store: SyncStore, ev: SyncEvent, now: Date): Pr
       const r = reduceNoteMediaUploaded(await store.getNote(ev.payload.noteId), ev);
       if (!r.ok) return r;
       if (r.changed) await store.putNote(r.value);
+      return { ok: true, changed: r.changed };
+    }
+
+    case "material.status_changed": {
+      const task = await store.getTask(ev.payload.taskId);
+      const r = reduceMaterialStatusChanged(task, ev, { actor });
+      if (!r.ok) return r;
+      if (r.changed) await store.putTask(r.value);
+      return { ok: true, changed: r.changed };
+    }
+
+    case "site.stage_changed": {
+      const [site, photoCount] = await Promise.all([
+        store.getSite(ev.payload.siteId),
+        store.countPhotoNotes(ev.payload.siteId),
+      ]);
+      const r = reduceSiteStageChanged(site, ev, { actor, photoCount });
+      if (!r.ok) return r;
+      if (r.changed) await store.putSite(r.value);
+      return { ok: true, changed: r.changed };
+    }
+
+    case "time.approved":
+    case "time.rejected": {
+      const r = reduceTimeReviewed(await store.getTimeEntry(ev.payload.timeEntryId), ev, { actor });
+      if (!r.ok) return r;
+      if (r.changed) await store.putTimeEntry(r.value);
       return { ok: true, changed: r.changed };
     }
 

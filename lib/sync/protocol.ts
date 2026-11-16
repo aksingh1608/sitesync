@@ -18,6 +18,10 @@ export const SyncRequestSchema = z.strictObject({
    * failing the batch. Only the envelope shape here can produce a 400.
    */
   events: z.array(z.unknown()).max(MAX_EVENTS_PER_SYNC),
+  /** App build on the device, recorded in `devices` (office freshness view). */
+  appVersion: z.string().max(40).optional(),
+  /** false: write only, skip the cursor pull (the office dashboard reads its own way). */
+  pull: z.boolean().optional(),
 });
 export type SyncRequest = z.infer<typeof SyncRequestSchema>;
 

@@ -8,6 +8,8 @@ const task = (id: string, dueAt: string | null, extra: Partial<TaskRow> = {}): T
   id,
   title: id,
   description: "",
+  materialStatus: null,
+  materialStatusAt: null,
   siteId: "s",
   assigneeId: "p",
   createdBy: "p",

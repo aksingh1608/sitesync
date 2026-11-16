@@ -31,11 +31,12 @@ export const COPY_TABLES: PgTable[] = [
   s.fieldNotes,
   s.revocations,
   s.events,
+  s.devices,
 ];
 
 /** Everything the seed owns (wiped before the copy). */
 const WIPE = sql`TRUNCATE events, field_notes, status_updates, time_entries, task_receipts, escalations,
-  push_subscriptions, digests, revocations, tasks, sites, rollouts, people, branches RESTART IDENTITY CASCADE`;
+  push_subscriptions, digests, revocations, devices, tasks, sites, rollouts, people, branches RESTART IDENTITY CASCADE`;
 
 const CHUNK = 250;
 

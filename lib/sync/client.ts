@@ -20,7 +20,7 @@ import { applyEvent } from "./apply";
 import { MAX_EVENTS_PER_SYNC, type SyncRequest, type WireSyncResponse } from "./protocol";
 import { dexieStore } from "./store-dexie";
 
-import { ACTOR_COOKIE } from "../config";
+import { ACTOR_COOKIE, APP_VERSION } from "../config";
 export { ACTOR_COOKIE };
 const SYNC_TIMEOUT_MS = 20_000;
 const BACKOFF_BASE_MS = 2_000;
@@ -249,6 +249,7 @@ async function runSync(opts: { manual?: boolean }): Promise<LastSyncResult> {
       const res = await transport({
         deviceId: meta.deviceId,
         actorId: meta.actorId,
+        appVersion: APP_VERSION,
         cursor,
         events: batch.map((i) => i.event),
       });
@@ -300,12 +301,12 @@ async function runSync(opts: { manual?: boolean }): Promise<LastSyncResult> {
 // Merging
 // ---------------------------------------------------------------------------
 const DATE_FIELDS = {
-  tasks: ["dueAt", "createdAt", "updatedAt"],
+  tasks: ["dueAt", "createdAt", "updatedAt", "materialStatusAt"],
   task_receipts: ["sentAt", "deliveredAt", "seenAt", "acknowledgedAt"],
-  time_entries: ["clockInAt", "clockOutAt"],
+  time_entries: ["clockInAt", "clockOutAt", "reviewedAt"],
   status_updates: ["at"],
   field_notes: ["processedAt", "createdAt"],
-  sites: [],
+  sites: ["stageChangedAt"],
   people: [],
   rollouts: [],
 } as const;
@@ -342,7 +343,7 @@ async function mergeResponse(meta: Meta, res: WireSyncResponse, fullReplace: boo
     await localDb.timeEntries.bulkPut(revive(c.time_entries, DATE_FIELDS.time_entries));
     await localDb.statusUpdates.bulkPut(revive(c.status_updates, DATE_FIELDS.status_updates));
     await localDb.fieldNotes.bulkPut(revive(c.field_notes, DATE_FIELDS.field_notes));
-    await localDb.sites.bulkPut(revive(c.sites, []));
+    await localDb.sites.bulkPut(revive(c.sites, DATE_FIELDS.sites));
     await localDb.people.bulkPut(revive(c.people, []));
     await localDb.rollouts.bulkPut(revive(c.rollouts, []));
 

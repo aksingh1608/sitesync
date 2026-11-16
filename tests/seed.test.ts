@@ -26,8 +26,14 @@ describe("seed", () => {
     expect(allEvents.every((e) => e.applied && e.rejectReason === null)).toBe(true);
 
     const entries = await db.select().from(timeEntries);
-    expect(entries.filter((e) => e.flagged)).toHaveLength(1);
-    expect(entries.find((e) => e.flagged)?.flagReason).toMatch(/^outside_geofence/);
+    const flagged = entries.filter((e) => e.flagged).map((e) => e.flagReason);
+    expect(flagged).toHaveLength(2);
+    expect(flagged.some((r) => r?.startsWith("outside_geofence"))).toBe(true);
+    expect(flagged.some((r) => r?.startsWith("no_location: denied"))).toBe(true);
+    // One forgotten clock-out from yesterday (plus today's two open entries).
+    expect(entries.filter((e) => e.clockOutAt === null)).toHaveLength(3);
+    const [lenses] = await db.select().from(tasks).where(eq(tasks.id, SEED_TASK_ID(33)));
+    expect(lenses.materialStatus).toBe("approved");
 
     const receipts = await db.select().from(taskReceipts);
     const states = new Set(

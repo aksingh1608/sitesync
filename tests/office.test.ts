@@ -100,8 +100,9 @@ describe("server queries (seeded)", () => {
   let db: Db;
   beforeAll(async () => {
     client = new PGlite();
-    db = drizzle({ client });
-    await migrate(db, { migrationsFolder: "./db/migrations" });
+    const mem = drizzle({ client });
+    await migrate(mem, { migrationsFolder: "./db/migrations" });
+    db = mem;
     await seed(db, { now: NOW });
   });
   afterAll(async () => client.close());

@@ -2,13 +2,13 @@
 // the (demo) actor may see the note, then streams the PRIVATE blob with the
 // server's credentials. Supports If-None-Match (304) and byte ranges (iOS
 // Safari requests audio with Range and needs 206 responses).
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 import { fieldNotes, people } from "@/lib/db/schema";
 import { withDb } from "@/lib/db/server";
 import { canViewNote } from "@/lib/media/record";
 import { readMedia } from "@/lib/media/store";
-import { ACTOR_COOKIE } from "@/lib/config";
+import { ACTOR_COOKIE, OFFICE_ACTOR_COOKIE } from "@/lib/config";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,25 +24,29 @@ async function toBytes(body: ReadableStream<Uint8Array> | Uint8Array): Promise<U
 
 export async function GET(request: NextRequest, ctx: RouteContext<"/api/media/[noteId]">) {
   const { noteId } = await ctx.params;
-  const actorId = request.cookies.get(ACTOR_COOKIE)?.value ?? "";
+  // The field identity and the office identity (one browser can hold both).
+  const actorIds = [ACTOR_COOKIE, OFFICE_ACTOR_COOKIE]
+    .map((c) => request.cookies.get(c)?.value ?? "")
+    .filter((v) => UUID.test(v));
   if (!UUID.test(noteId)) return text(404, "not found");
-  if (!UUID.test(actorId)) return text(401, "pick a person first");
+  if (!actorIds.length) return text(401, "pick a person first");
 
   try {
     const found = await withDb(async (db) => {
-      const [[actor], [note]] = await Promise.all([
-        db.select().from(people).where(eq(people.id, actorId)),
+      const [actors, [note]] = await Promise.all([
+        db.select().from(people).where(inArray(people.id, actorIds)),
         db.select().from(fieldNotes).where(eq(fieldNotes.id, noteId)),
       ]);
-      return { actor, note };
+      return { actors, note };
     });
-    if (!found.actor) return text(401, "unknown actor");
+    if (!found.actors.length) return text(401, "unknown actor");
+    const note = found.note;
     // Same answer for "missing" and "not yours", so ids can't be probed.
-    if (!found.note?.blobPath || !canViewNote(found.actor, found.note)) return text(404, "not found");
+    if (!note?.blobPath || !found.actors.some((a) => canViewNote(a, note))) return text(404, "not found");
 
     const media = await readMedia(
-      found.note.blobPath,
-      found.note.mimeType ?? "application/octet-stream",
+      note.blobPath,
+      note.mimeType ?? "application/octet-stream",
       request.headers.get("if-none-match") ?? undefined,
     );
     if (!media) return text(404, "not found");

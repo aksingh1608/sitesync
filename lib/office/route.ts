@@ -21,7 +21,8 @@ export async function officeGet(
       return NextResponse.json(out, { headers: noStore });
     });
   } catch (err) {
-    console.error("[api/office]", request.nextUrl.pathname, err);
+    // Drizzle wraps driver errors ("Failed query: ..."); the cause has the real message.
+    console.error("[api/office]", request.nextUrl.pathname, err, (err as { cause?: unknown })?.cause);
     return NextResponse.json({ error: "internal_error" }, { status: 500, headers: noStore });
   }
 }

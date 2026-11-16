@@ -10,6 +10,7 @@ import { APP_NAME, COMPANY_NAME } from "@/lib/config";
 import { setMeta, type DirectoryEntry } from "@/lib/db/local";
 import { ROLES, isOfficeRole, type Role } from "@/lib/domain";
 import { setActor, sync } from "@/lib/sync/client";
+import { setOfficeActorCookie } from "@/components/office/shell";
 
 const ROLE_LABEL: Record<Role, string> = {
   technician: "Technicians",
@@ -39,9 +40,16 @@ export default function RolePicker() {
   const people = fetched ?? meta?.directory ?? [];
 
   async function pick(p: DirectoryEntry) {
+    if (isOfficeRole(p.role as Role)) {
+      // The office has its own identity cookie, so this browser can keep a
+      // field worker on /field at the same time.
+      setOfficeActorCookie(p.id);
+      router.push("/office");
+      return;
+    }
     await setActor(p.id);
     void sync({ manual: true });
-    router.push(isOfficeRole(p.role as Role) ? "/debug" : "/field");
+    router.push("/field");
   }
 
   return (
@@ -55,7 +63,8 @@ export default function RolePicker() {
         role="note"
         className="rounded-md border border-amber-400 bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-100"
       >
-        <strong>Demo mode, no real login.</strong> Pick a person to act as them on this device.
+        <strong>Demo mode, no real login.</strong> Pick a person to act as them on this device. Office people open
+        the dashboard (/office); field people open the phone app (/field). One browser can run both.
       </div>
 
       {error && !people.length && (

@@ -114,6 +114,36 @@ from devices with `forbidden` and does not store them. Server code creates them 
 `processSync(db, req, { trusted: true, skipPull: true })`, deviceId `server:media`, and a
 deterministic event id (`mediaEventId(mediaId)`), so retries are duplicates.
 
+Day 3 (office) events: `material.status_changed { taskId, to: approved|ordered|delivered }`
+(coordinator/manager, material requests only, forward only; `delivered` also closes the task),
+`site.stage_changed { siteId, from, to }` (coordinator/manager, rollout stores; `from` must equal
+the current stage or it is rejected `stage_conflict`; Closeout/Done need >= 1 **uploaded** photo
+note on the site, else `photo_required`; sets `sites.stage_changed_at`), `time.approved` /
+`time.rejected { reason }` (HR/manager only; the later decision by clientTs wins; an open entry
+can be rejected but not approved). Columns: `tasks.material_status(_at)`, `sites.stage_changed_at`,
+`time_entries.review_status/reviewed_by/reviewed_at/review_reason`.
+
+## Office dashboard (/office, Day 3)
+
+Coordinator / HR / manager, desktop, **online only**. Reads: `GET /api/office/{snapshot,
+tasks/[id], timesheets?week=[&format=csv], team?from&to}` (`lib/office/queries.ts`; team stats
+aggregated in SQL), polled every 5 s (`OFFICE_POLL_MS`) and paused while the tab is hidden, with
+"Updated Xs ago". **Writes go through `POST /api/sync`** as events from a per-browser device id
+(`web-<uuid>` in localStorage) with `pull: false`; no admin write routes.
+- Identity: own cookie `sitesync_office_actor` (falls back to `sitesync_actor`), so one browser
+  can run /field as a technician and /office as a coordinator. `app/office/layout.tsx` redirects
+  field roles to /field; office APIs return 401 (no person) / 403 (field role). The media route
+  accepts either cookie.
+- Roles (UI hides, reducers enforce): coordinator everything except timesheet approval; HR
+  timesheets + team, tasks read-only (no Board/Rollouts); manager everything.
+- Freshness: `devices(id, person_id, last_sync_at, app_version)` is upserted by `/api/sync`
+  (`recordDevice`, not seed/server writes); the board shows "Last synced X ago", never an online dot.
+- Rules in `lib/office/rules.ts` (pure, tested): receipt stage, amber when sent > 30 min
+  (`ACK_WARN_MINUTES`) and not acknowledged, behind schedule = longer in stage than
+  `ROLLOUT_STAGE_EXPECTED_DAYS`, timesheet flags (geofence / no location / open > 14 h = missing
+  clock-out), CSV (formula-safe, BOM), assignee suggestions (active field people whose trade fits,
+  people at the site first). Timesheets use calendar weeks (Monday); "Needs review" spans 30 days.
+
 ## Media (private Vercel Blob store)
 
 Voice (MediaRecorder; mime picked with `isTypeSupported`, iOS gives audio/mp4; 2 min cap) and
@@ -178,6 +208,8 @@ app/
   ~offline/page.tsx      service-worker fallback page
   api/sync/route.ts      POST /api/sync (Zod → processSync)
   api/people/route.ts    GET directory for the role picker
+  office/                dashboard: board, tasks (+materials), rollouts, timesheets, team
+  api/office/            GET snapshot, tasks/[taskId], timesheets (+csv), team
   api/media/route.ts     POST upload -> private Blob + server-recorded note.media_uploaded
   api/media/[noteId]/    GET: authorized streaming of a note's media (ETag, Range)
   serwist/[path]/route.ts, sw.ts, manifest.ts, layout.tsx
@@ -203,9 +235,13 @@ lib/
   field/                 sites.ts (site preselection, Clock + Notes), notes.ts (why Save is disabled)
   sync/status.ts         describeSync: one sync view for top bar + Me (no signal is not an error)
   tasks/grouping.ts      Overdue / Today / Next 7 days / Later / Follow-ups (rolling, branch tz)
-db/  migrations/ (drizzle-kit), migrate.ts, seed.ts, seed-data.ts, connect.ts
+lib/office/              auth (office actor), queries (server reads + SQL stats), rules, derive,
+                         timesheets (rows + CSV), route (GET wrapper)
+components/office/       data (polling, writes via /api/sync), shell, ui, tasks
+db/  migrations/ (drizzle-kit), migrate.ts, seed.ts, seed-data.ts, seed-fast.ts, connect.ts
 tests/  Vitest: sync, day2 (authz, revocations, paging, media; PGlite), reducers, client,
-        client-day2, media (fake-indexeddb + PGlite), grouping, seed
+        client-day2, media (fake-indexeddb + PGlite), grouping, seed, field, day3 (office events,
+        devices), office (rules + queries on the seed)
 scripts/gen-icons.ts     placeholder PWA icons (no deps)
 ```
 
@@ -215,7 +251,7 @@ scripts/gen-icons.ts     placeholder PWA icons (no deps)
 pnpm dev | build | start | lint | typecheck | test
 pnpm db:generate   # after editing lib/db/schema.ts
 pnpm db:migrate    # applies db/migrations to DATABASE_URL (.env.local)
-pnpm db:seed       # wipes + reseeds demo data (clients: /debug → Reset local data)
+pnpm db:seed       # wipes + reseeds demo data in ~7 s (clients: /debug → Reset local data)
 pnpm db:studio
 pnpm icons         # regenerate placeholder icons
 ```
@@ -242,7 +278,7 @@ later-day keys.
    SW update prompt, Dexie v2). Task groups UI, task detail (auto `task.seen`, Acknowledge button),
    status changes, clock in/out with geolocation + site check + safety check, optional worker
    status, text/voice notes (blob upload when online), offline indicators.
-3. **Day 3: coordinator dashboard.** Live board (who is where, status), receipts view
+3. **Day 3 (done): coordinator dashboard.** Fast seed, devices table, office events. Live board (who is where, status), receipts view
    (sent/delivered/seen/acknowledged per task), rollout board (stores by stage), timesheets with
    flagged clock-ins, task create/assign.
 4. **Day 4: escalation + push.** Web Push subscriptions, rule-based escalation ladder
@@ -251,13 +287,13 @@ later-day keys.
    transcript → structured report/follow-ups), digest agent (`digests`), ops copilot.
 6. **Day 6: polish + demo.** Deploy to Vercel, demo script, airplane-mode walkthrough, hardening.
 
-## Known gaps (after Day 2)
+## Known gaps (after Day 3)
 
 - Revocations cover tasks only. Sites/rollouts a worker no longer has work at stay cached
   (reference data, harmless). The old assignee keeps their own (frozen) receipt row on the server.
-- Done (were the first two Day 3 hardening items): the server no longer trusts a device-reported
-  media URL (it records the pathname itself), and media lives in a private store served only
-  through the authenticated `/api/media/[noteId]` route.
+- Done (Day 3 hardening items 1 and 2, landed before Day 3): the server no longer trusts a
+  device-reported media URL (it records the pathname itself), and media lives in a private store
+  served only through the authenticated `/api/media/[noteId]` route. Also done on Day 3: fast seed.
 - Media auth uses the demo actor cookie, so it is only as strong as demo mode (no real login);
   the access gate keeps outsiders out, but anyone with the code can act as any seeded person.
 - Access gate: one shared code, no per-user accounts, only a small fixed delay against guessing
@@ -267,4 +303,13 @@ later-day keys.
 - Demo mode: no real auth. The API trusts `actorId`; authorization assumes the actor is honest.
 - Media stuck if its `note.created` is rejected by the server (blob stays on the device).
 - Reseeding deletes rows; already-synced clients should Reset local data (/debug).
-- Seeding over Neon is slow (one WebSocket round trip per statement, several minutes).
+- Seeding: `db:seed` builds the data in an in-memory PGlite through `processSync`, then copies it
+  to the target in ONE transaction (`db/seed-fast.ts`, ~12 statements, ~7 s). seq/server_seq are
+  reassigned by the target, so cursors only move forward. Devices rows are seeded directly
+  (freshness only, not a projection).
+- Office: online only, polling (no push); the snapshot loads all open tasks + 30 days of closed
+  ones (fine for a branch, not for thousands of tasks). Stats are computed live, not cached.
+- Office photo check counts only uploaded photos: a photo still on the phone does not unlock
+  Closeout yet.
+- This dev machine has a flaky route to Neon (TCP timeouts, no IPv6): occasional 500s locally
+  that retry fine; run the dev server with Node 24 (a Node 20 `next dev` was worse).

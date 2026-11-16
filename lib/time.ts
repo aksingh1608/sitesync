@@ -62,3 +62,24 @@ export function isoWeekday(key: string): number {
 
 /** The Monday of the week containing `key` (timesheets are calendar weeks, Monday first). */
 export const startOfWeekKey = (key: string) => addDays(key, 1 - isoWeekday(key));
+
+/** "YYYY-MM-DDTHH:mm" (for <input type="datetime-local">) of an instant, in `timeZone`. */
+export function toZonedInput(date: Date | string, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(date));
+  const get = (t: string) => parts.find((p) => p.type === t)!.value;
+  return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}`;
+}
+
+/** The instant for a "YYYY-MM-DDTHH:mm" wall-clock value in `timeZone` (null if malformed). */
+export function fromZonedInput(value: string, timeZone: string): Date | null {
+  const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})/.exec(value);
+  return m ? zonedTime(m[1], Number(m[2]), Number(m[3]), timeZone) : null;
+}

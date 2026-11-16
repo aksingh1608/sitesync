@@ -4,6 +4,7 @@ import { drizzle } from "drizzle-orm/pglite";
 import { migrate } from "drizzle-orm/pglite/migrator";
 import { describe, expect, it } from "vitest";
 import { SEED_IDS, SEED_TASK_ID, seed } from "@/db/seed-data";
+import { COPY_TABLES, seedViaMemory } from "@/db/seed-fast";
 import { BRANCH_TIMEZONE } from "@/lib/config";
 import { events, taskReceipts, tasks, timeEntries } from "@/lib/db/schema";
 import { groupTasks } from "@/lib/tasks/grouping";
@@ -86,6 +87,42 @@ describe("seed", () => {
     const g = await samGroups(db, sunday);
     for (const k of ["overdue", "today", "next7", "later", "followUps", "closed"] as const) expect(g[k].length, k).toBeGreaterThan(0);
     await client.close();
+  });
+});
+
+describe("seedViaMemory (fast remote reseed)", () => {
+  it("produces the same rows as the direct seed in a few statements, with fresh, forward-only seqs", async () => {
+    const now = new Date("2026-11-11T16:00:00Z");
+    const open = async () => {
+      const client = new PGlite();
+      const db = drizzle({ client });
+      await migrate(db, { migrationsFolder: "./db/migrations" });
+      return { client, db };
+    };
+    const direct = await open();
+    const target = await open();
+    await seed(direct.db, { now });
+    // Push the target's sequence ahead, as on a database that has been used.
+    await target.db.execute(sql`select setval('sync_seq', 100000)`);
+    const out = await seedViaMemory(target.db, { now });
+    expect(out.statements).toBeLessThan(40);
+
+    const strip = (rows: Record<string, unknown>[]) =>
+      rows
+        .map(({ seq: _a, serverSeq: _b, serverTs: _c, id, ...r }) => (void _a, void _b, void _c, { id: typeof id === "number" ? null : id, ...r }))
+        .map((r) => JSON.stringify(r))
+        .sort();
+    for (const table of COPY_TABLES) {
+      const a = (await direct.db.select().from(table)) as Record<string, unknown>[];
+      const b = (await target.db.select().from(table)) as Record<string, unknown>[];
+      expect(strip(b)).toEqual(strip(a));
+      if (b.length && "seq" in b[0]) expect(b.every((r) => Number(r.seq) > 100000)).toBe(true);
+    }
+    const evs = await target.db.select().from(events).orderBy(events.serverSeq);
+    const directEvs = await direct.db.select().from(events).orderBy(events.serverSeq);
+    expect(evs.map((e) => e.id)).toEqual(directEvs.map((e) => e.id)); // replay order kept
+    await direct.client.close();
+    await target.client.close();
   });
 });
 

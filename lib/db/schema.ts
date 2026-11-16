@@ -31,7 +31,9 @@ import {
   TASK_STATUSES,
   TRADES,
   WORKER_STATUSES,
+  type EscalationRule,
   type MaterialStatus,
+  type SmsStatus,
   type RevocableEntity,
   type TaskLwwField,
   type TimeReviewStatus,
@@ -348,7 +350,12 @@ export const events = pgTable(
 // ---------------------------------------------------------------------------
 // Later days (tables exist now so the schema is stable; unused on Day 1)
 // ---------------------------------------------------------------------------
-/** Day 4: Web Push subscriptions. */
+/**
+ * Day 4: Web Push subscriptions. One browser (endpoint) may carry several
+ * people in demo mode (field technician + office coordinator in one browser),
+ * so the key is (endpoint, person). Rows whose push service answers 404/410
+ * are deleted by the sender.
+ */
 export const pushSubscriptions = pgTable(
   "push_subscriptions",
   {
@@ -356,6 +363,8 @@ export const pushSubscriptions = pgTable(
     personId: uuid("person_id")
       .notNull()
       .references(() => people.id),
+    /** The app's device id (field: Dexie meta; office: web-<uuid>). Informational. */
+    deviceId: text("device_id"),
     endpoint: text("endpoint").notNull(),
     p256dh: text("p256dh").notNull(),
     auth: text("auth").notNull(),
@@ -365,10 +374,20 @@ export const pushSubscriptions = pgTable(
     lastFailureAt: tsz("last_failure_at"),
     failureCount: integer("failure_count").notNull().default(0),
   },
-  (t) => [uniqueIndex("push_subscriptions_endpoint_idx").on(t.endpoint)],
+  (t) => [
+    uniqueIndex("push_subscriptions_endpoint_person_idx").on(t.endpoint, t.personId),
+    index("push_subscriptions_person_idx").on(t.personId),
+  ],
 );
 
-/** Day 4: escalation ladder push -> SMS -> coordinator alert. */
+/**
+ * Day 4: every notification and escalation step, recorded once. The unique key
+ * (task, rule, episode, level) is what makes concurrent rule runs safe: a run
+ * claims a step by inserting its row (ON CONFLICT DO NOTHING) and only the
+ * claimer sends. `episode` scopes a ladder: the assignee + sent time for
+ * "ack", the due date for "overdue", the status event for "blocked", the
+ * change event for "changed"; a new episode starts a fresh ladder.
+ */
 export const escalations = pgTable(
   "escalations",
   {
@@ -376,17 +395,28 @@ export const escalations = pgTable(
     taskId: uuid("task_id")
       .notNull()
       .references(() => tasks.id),
+    /** Main recipient (assignee, or the coordinator for an alert). */
     personId: uuid("person_id")
       .notNull()
       .references(() => people.id),
+    rule: text("rule").$type<EscalationRule>().notNull().default("ack"),
+    episode: text("episode").notNull().default(""),
     level: integer("level").notNull(),
     channel: escalationChannelEnum("channel").notNull(),
     status: escalationStatusEnum("status").notNull().default("pending"),
+    /** Human sentence: why this step happened ("Urgent task not acknowledged for 30 min"). */
     reason: text("reason").notNull(),
+    /** Demo-clock time at which the step became due. */
     scheduledFor: tsz("scheduled_for").notNull(),
+    /** Demo-clock time the step was sent (or skipped). */
     sentAt: tsz("sent_at"),
+    /** Twilio message SID, or the number of push deliveries. */
+    providerId: text("provider_id"),
+    error: text("error"),
+    /** Coordinator alerts: when it was handled (by a person, or automatically). */
     resolvedAt: tsz("resolved_at"),
-    detail: jsonb("detail"),
+    handledBy: uuid("handled_by").references(() => people.id),
+    detail: jsonb("detail").$type<Record<string, unknown>>(),
     createdAt: tsz("created_at").notNull().defaultNow(),
     seq: seq(),
   },
@@ -394,8 +424,51 @@ export const escalations = pgTable(
     index("escalations_seq_idx").on(t.seq),
     index("escalations_task_idx").on(t.taskId),
     index("escalations_due_idx").on(t.status, t.scheduledFor),
+    uniqueIndex("escalations_step_idx").on(t.taskId, t.rule, t.episode, t.level),
   ],
 );
+
+/**
+ * Day 4: every SMS, mock or real (the "SMS log"). Real numbers are never
+ * stored: `toMasked` keeps the last 2 digits only.
+ */
+export const smsMessages = pgTable(
+  "sms_messages",
+  {
+    id: uuid("id").primaryKey(),
+    escalationId: uuid("escalation_id").references(() => escalations.id),
+    personId: uuid("person_id")
+      .notNull()
+      .references(() => people.id),
+    provider: text("provider").$type<"mock" | "twilio">().notNull(),
+    toMasked: text("to_masked").notNull(),
+    /** What we wanted to say. */
+    body: text("body").notNull(),
+    /** What the provider actually sent (a Twilio trial replaces custom text with a template). */
+    sentBody: text("sent_body"),
+    status: text("status").$type<SmsStatus>().notNull(),
+    providerId: text("provider_id"),
+    error: text("error"),
+    createdAt: tsz("created_at").notNull(),
+    updatedAt: tsz("updated_at").notNull(),
+  },
+  (t) => [index("sms_messages_created_idx").on(t.createdAt)],
+);
+
+/**
+ * Day 4: demo-only settings, one row (id = 1). `clockOffsetMs` moves the
+ * server-side rule clock (lib/clock.ts) for the "Fast-forward" control.
+ */
+export const demoSettings = pgTable("demo_settings", {
+  id: integer("id").primaryKey(),
+  clockOffsetMs: bigint("clock_offset_ms", { mode: "number" }).notNull().default(0),
+  /** Throttle for dashboard-poll escalation runs (shared by all server instances). */
+  lastEscalationRunAt: tsz("last_escalation_run_at"),
+  /** The seeded person whose SMS really goes to SMS_DEMO_TO_NUMBER (no FK: survives reseeds). */
+  smsDemoPersonId: uuid("sms_demo_person_id"),
+  updatedAt: tsz("updated_at"),
+  updatedBy: uuid("updated_by"),
+});
 
 /** Day 5: AI digests (daily/weekly summaries). */
 export const digests = pgTable(
@@ -433,3 +506,6 @@ export type FieldNote = typeof fieldNotes.$inferSelect;
 export type EventRow = typeof events.$inferSelect;
 export type Revocation = typeof revocations.$inferSelect;
 export type Device = typeof devices.$inferSelect;
+export type Escalation = typeof escalations.$inferSelect;
+export type SmsMessage = typeof smsMessages.$inferSelect;
+export type PushSubscriptionRow = typeof pushSubscriptions.$inferSelect;

@@ -36,7 +36,7 @@ export const COPY_TABLES: PgTable[] = [
 ];
 
 /** Everything the seed owns (wiped before the copy). */
-const WIPE = sql`TRUNCATE events, field_notes, status_updates, time_entries, task_receipts, escalations,
+const WIPE = sql`TRUNCATE events, field_notes, status_updates, time_entries, task_receipts, sms_messages, escalations,
   push_subscriptions, digests, revocations, devices, tasks, sites, rollouts, people, branches RESTART IDENTITY CASCADE`;
 
 const CHUNK = 250;
@@ -71,6 +71,7 @@ export async function seedViaMemory(target: Db, opts: { now?: Date } = {}): Prom
     let statements = 1;
     await target.transaction(async (tx) => {
       await tx.execute(WIPE);
+      await tx.execute(sql`UPDATE demo_settings SET clock_offset_ms = 0, last_escalation_run_at = NULL`);
       for (const { table, rows } of data) {
         for (let i = 0; i < rows.length; i += CHUNK) {
           await tx.insert(table).values(rows.slice(i, i + CHUNK) as never);

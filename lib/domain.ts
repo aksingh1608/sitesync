@@ -91,9 +91,22 @@ export const REVOCABLE_ENTITIES = ["task"] as const;
 export type RevocableEntity = (typeof REVOCABLE_ENTITIES)[number];
 export type NoteKind = (typeof NOTE_KINDS)[number];
 
-/** Day 4+ (escalation ladder). Defined now so the schema is stable. */
+/** Day 4 escalation ladder (see lib/escalation). */
 export const ESCALATION_CHANNELS = ["push", "sms", "coordinator_alert"] as const;
-export const ESCALATION_STATUSES = ["pending", "sent", "resolved", "cancelled"] as const;
+export type EscalationChannel = (typeof ESCALATION_CHANNELS)[number];
+/**
+ * pending: claimed, being sent. sent: delivered to the provider. failed: the
+ * provider refused. skipped: recorded but not sent (no subscription, stale,
+ * superseded by a later step). resolved: a coordinator alert that was handled
+ * (by a person or automatically). cancelled: unused (kept for the enum).
+ */
+export const ESCALATION_STATUSES = ["pending", "sent", "resolved", "cancelled", "failed", "skipped"] as const;
+export type EscalationStatus = (typeof ESCALATION_STATUSES)[number];
+/** Which rule produced an escalation row. */
+export const ESCALATION_RULES = ["ack", "overdue", "blocked", "changed"] as const;
+export type EscalationRule = (typeof ESCALATION_RULES)[number];
+export const SMS_STATUSES = ["mocked", "queued", "sent", "delivered", "undelivered", "failed"] as const;
+export type SmsStatus = (typeof SMS_STATUSES)[number];
 
 /** Task fields that use per-field last-write-wins. */
 export const TASK_LWW_FIELDS = [

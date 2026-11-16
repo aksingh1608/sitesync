@@ -35,6 +35,7 @@ const httpUpload: UploadTransport = async ({ file, mediaId, noteId, actorId, mim
     signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
     cache: "no-store",
   });
+  if (res.status === 401) throw new Error("Access code needed: reload the app and enter it");
   if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text().catch(() => "")).slice(0, 200)}`);
   return (await res.json()) as { ok: true; mediaUrl: string | null };
 };

@@ -10,6 +10,20 @@ instruction reached the worker (receipt chain: sent → delivered → seen → a
 - Company in the app: **"Demo Electrical Co."**. Fictional data only. Never use a real company's
   name, logo or branding.
 - Demo mode has no real login: `/` picks a seeded person (actorId in Dexie + `sitesync_actor` cookie).
+- **Access gate** (brought forward from Day 6): `proxy.ts` (Next 16's renamed middleware) requires
+  the shared `DEMO_ACCESS_CODE` on every page and API route except `/manifest.webmanifest`,
+  `/icons/*`, `/serwist/*`, `/~offline`, `/_next/static|image` and `POST /api/unlock`
+  (`isPublicPath` in `lib/access.ts`; the `matcher` is only a pre-filter and is tested against it).
+  `/api/unlock` sets the httpOnly, Secure (prod), SameSite=Lax cookie `sitesync_access` = SHA-256 of
+  the code (rotating the code relocks everyone). Locked pages get an inline code form with **401,
+  never a redirect**: Serwist's precache copies redirected responses into the cache and fails on
+  non-OK ones, and runtime caching keeps only 200s, so the gate page can never become the app shell;
+  the worker installs (and precaches the real shells) only during an unlocked visit, and offline
+  field pages keep working afterwards. Locked APIs get 401 JSON (the sync bar says to reload).
+  Production without `DEMO_ACCESS_CODE` fails closed (503); dev without it is open.
+- **Stable test URL:** production, https://sitesync-gamma.vercel.app (Vercel project
+  `aksingh1608s-projects/sitesync`). Preview URLs change per deploy and an installed PWA is tied
+  to its URL. Deploy with `pnpm dlx vercel@65.9.0 deploy --prod` only after the user says so.
 
 ## Stack (versions verified 2026-11-15)
 
@@ -204,7 +218,8 @@ pnpm icons         # regenerate placeholder icons
 ```
 
 Secrets only in `.env.local` (gitignored). `.env.example` lists every key:
-`DATABASE_URL`, `BLOB_READ_WRITE_TOKEN` or `BLOB_STORE_ID` + OIDC (Day 2, private store), `SITESYNC_LOCAL_MEDIA` (optional dev flag), and
+`DATABASE_URL`, `BLOB_READ_WRITE_TOKEN` or `BLOB_STORE_ID` + OIDC (Day 2, private store),
+`DEMO_ACCESS_CODE` (access gate; required in production), `SITESYNC_LOCAL_MEDIA` (optional dev flag), and
 later-day keys.
 
 ## Conventions
@@ -240,7 +255,10 @@ later-day keys.
 - Done (were the first two Day 3 hardening items): the server no longer trusts a device-reported
   media URL (it records the pathname itself), and media lives in a private store served only
   through the authenticated `/api/media/[noteId]` route.
-- Media auth uses the demo actor cookie, so it is only as strong as demo mode (no real login).
+- Media auth uses the demo actor cookie, so it is only as strong as demo mode (no real login);
+  the access gate keeps outsiders out, but anyone with the code can act as any seeded person.
+- Access gate: one shared code, no per-user accounts, only a small fixed delay against guessing
+  (no rate limiting yet).
 - Local media blobs are kept on the recording device indefinitely (no eviction yet).
 - Other devices can't play media offline (the route is network-only in the service worker).
 - Demo mode: no real auth. The API trusts `actorId`; authorization assumes the actor is honest.

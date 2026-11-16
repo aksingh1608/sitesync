@@ -56,6 +56,7 @@ const httpTransport: Transport = async (req) => {
     signal: AbortSignal.timeout(SYNC_TIMEOUT_MS),
     cache: "no-store",
   });
+  if (res.status === 401) throw new HttpError(401, "Access code needed: reload the app and enter it");
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new HttpError(res.status, `HTTP ${res.status}: ${text.slice(0, 300)}`);

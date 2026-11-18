@@ -22,6 +22,7 @@
     "@ai-sdk/anthropic": "4.0.96",
     "@ai-sdk/openai": "4.0.108",
     "@base-ui/react": "^1.9.0",
+    "@electric-sql/pglite": "0.5.16",
     "@neondatabase/serverless": "1.2.1",
     "@serwist/turbopack": "9.5.13",
     "@vercel/blob": "2.8.2",
@@ -46,7 +47,6 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
-    "@electric-sql/pglite": "0.5.16",
     "@tailwindcss/turbopack": "4.3.3",
     "@types/node": "^24.19.2",
     "@types/react": "^19",

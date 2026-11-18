@@ -132,6 +132,8 @@ function ResetDevice({ pending }: { pending: number }) {
         onClick={async () => {
           if (!armed) return setArmed(true);
           await resetLocalData();
+          // A full reload on purpose: the local database was just deleted, so no client state may survive.
+          // eslint-disable-next-line @next/next/no-location-assign-relative-destination
           window.location.assign("/");
         }}
       >

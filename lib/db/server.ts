@@ -25,3 +25,9 @@ export async function withDb<T>(fn: (db: ReturnType<typeof drizzle>) => Promise<
     await pool.end();
   }
 }
+
+/** A Pool + Drizzle that the caller closes (for work that manages its own retries, e.g. reseed). */
+export function openDb() {
+  const pool = new Pool({ connectionString: requireDatabaseUrl() });
+  return { db: drizzle({ client: pool }), close: () => pool.end() };
+}

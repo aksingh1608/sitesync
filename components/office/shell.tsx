@@ -1,5 +1,5 @@
 "use client";
-import { Activity, BarChart3, CalendarClock, ClipboardList, Inbox, LayoutGrid, MessageSquare, Newspaper, Package, Store } from "lucide-react";
+import { Activity, BarChart3, Gauge, CalendarClock, ClipboardList, Inbox, LayoutGrid, MessageSquare, Newspaper, Package, Store } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import type { ReactNode } from "react";
@@ -23,6 +23,7 @@ const NAV = [
   { href: "/office/dispatch", label: "Dispatch drafts", icon: Inbox, show: (r: Role) => r !== "hr" },
   { href: "/office/digest", label: "Daily digest", icon: Newspaper, show: () => true },
   { href: "/office/agents", label: "Agent activity", icon: Activity, show: () => true },
+  { href: "/office/demo", label: "Demo control", icon: Gauge, show: (r: Role) => r === "manager" },
 ];
 
 const ROLE_LABEL: Record<string, string> = { coordinator: "Coordinator", hr: "HR", manager: "Manager" };

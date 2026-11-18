@@ -43,7 +43,8 @@ export type PushResult = { delivered: number; failed: number; removed: number; s
 export async function pushToPeople(
   db: Db,
   personIds: string[],
-  message: { title: string; body: string; taskId: string },
+  /** `taskId` links to the task (field or office view by role); `url` + `tag` link anywhere else. */
+  message: { title: string; body: string; taskId: string } | { title: string; body: string; url: string; tag: string },
   opts: { urgent?: boolean; sender?: PushSender; real?: Date } = {},
 ): Promise<PushResult> {
   const out: PushResult = { delivered: 0, failed: 0, removed: 0, subscriptions: 0, errors: [] };
@@ -62,8 +63,8 @@ export async function pushToPeople(
       const payload: PushPayload = {
         title: message.title,
         body: message.body,
-        url: taskUrlFor(role, message.taskId),
-        tag: `task-${message.taskId}`,
+        url: "taskId" in message ? taskUrlFor(role, message.taskId) : message.url,
+        tag: "taskId" in message ? `task-${message.taskId}` : message.tag,
       };
       try {
         await send({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } }, JSON.stringify(payload), {

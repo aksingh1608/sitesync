@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { SyncStatus } from "@/components/sync-status";
 import { formatTime, useActor, useMeta } from "@/components/use-local";
-import { BRANCH_TIMEZONE } from "@/lib/config";
+import { BRANCH_TIMEZONE, canSeeDebug } from "@/lib/config";
 import { localDb } from "@/lib/db/local";
 import { isOfficeRole } from "@/lib/domain";
 import { groupTasks } from "@/lib/tasks/grouping";
@@ -89,6 +89,17 @@ export default function DebugPage() {
   const pending = outbox?.filter((i) => i.status === "pending") ?? [];
   const rejected = outbox?.filter((i) => i.status === "rejected") ?? [];
 
+  // Hidden unless the person is a manager or the demo flag is on (render after the hooks).
+  if (meta === undefined || (actorId && actor === undefined)) return <main className="p-4 text-sm">Loading…</main>;
+  if (!canSeeDebug(actor?.role)) {
+    return (
+      <main className="mx-auto max-w-md space-y-3 p-6 text-sm">
+        <h1 className="text-lg font-semibold">Sync console</h1>
+        <p>This tool is for managers (or demo mode). Pick a manager on the start page to use it.</p>
+        <Link href="/" className="underline">Back to the start page</Link>
+      </main>
+    );
+  }
   return (
     <main className="mx-auto w-full max-w-3xl p-4 space-y-4">
       <header className="space-y-2">

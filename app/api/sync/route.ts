@@ -2,6 +2,7 @@ import { after } from "next/server";
 import { withDb } from "@/lib/db/server";
 import { afterSyncAgents } from "@/lib/agents/hooks";
 import { handleSync } from "@/lib/sync/http";
+import { clientIp, hit, limitsFor } from "@/lib/ratelimit";
 import { processSync } from "@/lib/sync/service";
 
 export const runtime = "nodejs";
@@ -18,7 +19,11 @@ export async function POST(request: Request) {
   let accepted = 0;
   // A fresh Pool per attempt, so a retry never reuses a broken connection.
   const res = await handleSync(body, async (req) => {
-    const out = await withDb((db) => processSync(db, req, { recordDevice: true }));
+    const out = await withDb(async (db) => {
+      const limited = await hit(db, [limitsFor("syncDevice", req.deviceId), limitsFor("syncIp", clientIp(request.headers))]);
+      if (!limited.ok) return { ok: false as const, status: 429 as const, error: "rate_limited" as const, retryAfterSec: limited.retryAfterSec };
+      return processSync(db, req, { recordDevice: true });
+    });
     if (out.ok) accepted = out.response.accepted.length;
     return out;
   });

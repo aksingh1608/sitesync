@@ -7,7 +7,8 @@ import { NotificationsCard } from "@/components/push/field-card";
 import { formatTime, useActor, useMeta } from "@/components/use-local";
 import { localDb } from "@/lib/db/local";
 import { WORKER_STATUSES, type WorkerStatus } from "@/lib/domain";
-import { enqueue, sync } from "@/lib/sync/client";
+import { canSeeDebug, DEMO_MODE } from "@/lib/config";
+import { enqueue, resetLocalData, sync } from "@/lib/sync/client";
 import { cn } from "@/lib/utils";
 
 const STATUS_LABEL: Record<WorkerStatus, string> = {
@@ -103,8 +104,39 @@ export default function MePage() {
 
       <div className="grid grid-cols-2 gap-2">
         <BigLink href="/">Switch person</BigLink>
-        <BigLink href="/debug">Debug console</BigLink>
+        {canSeeDebug(actor?.role) && <BigLink href="/debug">Debug console</BigLink>}
       </div>
+
+      {DEMO_MODE && <ResetDevice pending={pending.count} />}
     </>
+  );
+}
+
+/** Demo only: wipe this phone's local data (after the office reset the demo). */
+function ResetDevice({ pending }: { pending: number }) {
+  const [armed, setArmed] = useState(false);
+  return (
+    <Panel>
+      <h2 className="text-xl font-bold">Demo: reset this device</h2>
+      <p className="text-base">
+        Use after &ldquo;Reset demo&rdquo; in the office. Clears this phone&apos;s copy of the data and goes back to the
+        person picker. The server is not touched.
+      </p>
+      {pending > 0 && (
+        <p className="rounded-lg bg-amber-100 p-3 text-base font-semibold text-amber-950">
+          {pending} change{pending === 1 ? "" : "s"} on this phone have not synced yet and will be lost.
+        </p>
+      )}
+      <BigButton
+        tone="neutral"
+        onClick={async () => {
+          if (!armed) return setArmed(true);
+          await resetLocalData();
+          window.location.assign("/");
+        }}
+      >
+        {armed ? "Tap again to reset this device" : "Reset this device"}
+      </BigButton>
+    </Panel>
   );
 }

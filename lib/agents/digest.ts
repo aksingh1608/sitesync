@@ -15,7 +15,8 @@ import { entryHours, STAGE_LABEL } from "../office/rules";
 import type { Db } from "../sync/store-drizzle";
 import { addDays, dayKey } from "../time";
 import { uuidv4 } from "../uuid";
-import { MAX_OUTPUT_TOKENS, modelsFromEnv, readUsage, withFallback, type AgentModels } from "./ai";
+import { budgetedModels } from "./budget";
+import { MAX_OUTPUT_TOKENS, readUsage, withFallback, type AgentModels } from "./ai";
 import { tokenCostUsd } from "./pricing";
 import { finishRun, startRun } from "./runs";
 
@@ -238,7 +239,7 @@ export async function generateDigest(
   input: { day: string; now: Date; trigger: string; actorId?: string | null },
   deps: { models?: AgentModels; real?: () => Date } = {},
 ) {
-  const models = deps.models ?? modelsFromEnv();
+  const models = deps.models ?? (await budgetedModels(db));
   const real = deps.real ?? (() => new Date());
   const numbers = await computeDigestNumbers(db, input.day, input.now);
   const runId = await startRun(db, {

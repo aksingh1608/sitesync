@@ -4,6 +4,7 @@ import { z } from "zod";
 import { askCopilot } from "@/lib/agents/copilot";
 import { loadClock } from "@/lib/clock";
 import { officePost } from "@/lib/office/route";
+import { agentLimit } from "@/lib/ratelimit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,6 +14,8 @@ const Body = z.strictObject({ question: z.string().trim().min(3).max(500) });
 
 export function POST(request: NextRequest) {
   return officePost(request, () => true, async (db, actor, body) => {
+    const limited = await agentLimit(db, actor.id, request.headers);
+    if (limited) return limited;
     const parsed = Body.safeParse(body);
     if (!parsed.success) return NextResponse.json({ error: "Ask a question (3 to 500 characters)." }, { status: 400 });
     const clock = await loadClock(db);

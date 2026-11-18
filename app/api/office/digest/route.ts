@@ -7,6 +7,7 @@ import { loadClock } from "@/lib/clock";
 import { BRANCH_TIMEZONE } from "@/lib/config";
 import { canManageTasks } from "@/lib/domain";
 import { officeGet, officePost } from "@/lib/office/route";
+import { agentLimit } from "@/lib/ratelimit";
 import { dayKey } from "@/lib/time";
 
 export const runtime = "nodejs";
@@ -24,6 +25,8 @@ export function GET(request: NextRequest) {
 
 export function POST(request: NextRequest) {
   return officePost(request, canManageTasks, async (db, actor, body) => {
+    const limited = await agentLimit(db, actor.id, request.headers);
+    if (limited) return limited;
     const parsed = Body.safeParse(body);
     if (!parsed.success) return NextResponse.json({ error: "invalid_request" }, { status: 400 });
     const clock = await loadClock(db);

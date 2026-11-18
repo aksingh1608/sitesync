@@ -16,7 +16,8 @@ import { suggestAssignees } from "../office/rules";
 import type { Db } from "../sync/store-drizzle";
 import { formatInZone } from "../time";
 import { uuidv4 } from "../uuid";
-import { MAX_OUTPUT_TOKENS, modelsFromEnv, readUsage, withFallback, type AgentModels } from "./ai";
+import { budgetedModels } from "./budget";
+import { MAX_OUTPUT_TOKENS, readUsage, withFallback, type AgentModels } from "./ai";
 import { tokenCostUsd } from "./pricing";
 import { finishRun, startRun } from "./runs";
 
@@ -299,7 +300,7 @@ export async function runDispatchAgent(
   input: { text: string; siteHintId: string | null; actorId: string; trigger: string },
   deps: { models?: AgentModels; now?: () => Date } = {},
 ): Promise<DispatchResult> {
-  const models = deps.models ?? modelsFromEnv();
+  const models = deps.models ?? (await budgetedModels(db));
   const now = (deps.now ?? (() => new Date()))();
   const draftId = uuidv4();
   const ctx = await loadDispatchContext(db, input.siteHintId, now);

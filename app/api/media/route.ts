@@ -12,6 +12,7 @@ import { checkUploadAllowed, recordMediaUpload } from "@/lib/media/record";
 import { storeMedia } from "@/lib/media/store";
 import { baseMime, extFor } from "@/lib/media/types";
 import { mediaUrlFor } from "@/lib/sync/visibility";
+import { clientIp, hit, limitsFor, tooMany } from "@/lib/ratelimit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -47,6 +48,8 @@ export async function POST(request: Request) {
   if (file.size === 0 || file.size > MAX_MEDIA_BYTES) return fail(413, "too_large");
 
   try {
+    const limited = await withDb((db) => hit(db, [limitsFor("uploadActor", actorId), limitsFor("uploadIp", clientIp(request.headers))]));
+    if (!limited.ok) return tooMany(limited);
     const allowed = await withDb((db) => checkUploadAllowed(db, { actorId, noteId, mediaId }));
     if (!allowed.ok) return fail(allowed.status, allowed.error);
 

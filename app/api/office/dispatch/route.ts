@@ -6,6 +6,7 @@ import { z } from "zod";
 import { listDrafts, runDispatchAgent, SAMPLE_REQUESTS } from "@/lib/agents/dispatch";
 import { canManageTasks } from "@/lib/domain";
 import { officeGet, officePost } from "@/lib/office/route";
+import { agentLimit } from "@/lib/ratelimit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,6 +23,8 @@ export function GET(request: NextRequest) {
 
 export function POST(request: NextRequest) {
   return officePost(request, canManageTasks, async (db, actor, body) => {
+    const limited = await agentLimit(db, actor.id, request.headers);
+    if (limited) return limited;
     const parsed = Body.safeParse(body);
     if (!parsed.success) return NextResponse.json({ error: "Describe the request (at least a few words)." }, { status: 400 });
     return runDispatchAgent(db, { text: parsed.data.text, siteHintId: parsed.data.siteId ?? null, actorId: actor.id, trigger: "office" });

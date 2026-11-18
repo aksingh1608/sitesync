@@ -1,4 +1,11 @@
 export const APP_NAME = "SiteSync";
+/**
+ * Demo mode (build-time flag NEXT_PUBLIC_DEMO_MODE=1): the sync console
+ * (/debug, simulate offline) is open to every demo person, and phones show
+ * "Reset this device". Without it /debug is for managers only.
+ */
+export const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "1";
+export const canSeeDebug = (role: string | null | undefined) => DEMO_MODE || role === "manager";
 export const COMPANY_NAME = "Demo Electrical Co.";
 export const THEME_COLOR = "#0f172a";
 /** Branch timezone used for Overdue / Today / Next 7 days grouping (single branch on Day 1). */

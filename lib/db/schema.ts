@@ -581,6 +581,20 @@ export const dispatchDrafts = pgTable(
   (t) => [index("dispatch_drafts_status_idx").on(t.status, t.createdAt)],
 );
 
+/**
+ * Day 6: fixed-window request counters for rate limits (lib/ratelimit.ts).
+ * In Postgres so every server instance shares them. Old windows are pruned.
+ */
+export const rateLimits = pgTable(
+  "rate_limits",
+  {
+    key: text("key").notNull(),
+    windowStart: tsz("window_start").notNull(),
+    count: integer("count").notNull().default(0),
+  },
+  (t) => [primaryKey({ columns: [t.key, t.windowStart] }), index("rate_limits_window_idx").on(t.windowStart)],
+);
+
 // ---------------------------------------------------------------------------
 // Row types
 // ---------------------------------------------------------------------------

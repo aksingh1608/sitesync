@@ -17,7 +17,8 @@ import type { SyncEventInput } from "../events";
 import { readMedia } from "../media/store";
 import { processSync } from "../sync/service";
 import type { Db } from "../sync/store-drizzle";
-import { MAX_OUTPUT_TOKENS, modelsFromEnv, readUsage, withFallback, type AgentModels } from "./ai";
+import { budgetedModels } from "./budget";
+import { MAX_OUTPUT_TOKENS, readUsage, withFallback, type AgentModels } from "./ai";
 import { agentDeviceId, stableUuid } from "./ids";
 import { tokenCostUsd, transcriptionCostUsd } from "./pricing";
 import { finishRun, startRun } from "./runs";
@@ -244,7 +245,7 @@ export type ReportOutcome =
 /** Reads one note and acts on it. Never throws for model problems; DB errors propagate. */
 export async function runReportAgent(db: Db, noteId: string, opts: { trigger: string; deps?: ReportDeps }): Promise<ReportOutcome> {
   const deps = opts.deps ?? {};
-  const models = deps.models ?? modelsFromEnv();
+  const models = deps.models ?? (await budgetedModels(db));
   const now = deps.now ?? (() => new Date());
 
   const [note] = await db.select().from(fieldNotes).where(eq(fieldNotes.id, noteId));

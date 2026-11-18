@@ -13,7 +13,8 @@ import { loadSnapshot } from "../office/queries";
 import { agoLabel, behindSchedule, entryFlags, FLAG_LABEL, stageAgeDays, STAGE_LABEL } from "../office/rules";
 import type { Db } from "../sync/store-drizzle";
 import { formatInZone } from "../time";
-import { MAX_OUTPUT_TOKENS, modelsFromEnv, readUsage, withFallback, type AgentModels } from "./ai";
+import { budgetedModels } from "./budget";
+import { MAX_OUTPUT_TOKENS, readUsage, withFallback, type AgentModels } from "./ai";
 import { tokenCostUsd } from "./pricing";
 import { finishRun, startRun } from "./runs";
 
@@ -346,7 +347,7 @@ export async function askCopilot(
   input: { question: string; actor: CopilotActor; now: Date; trigger?: string },
   deps: { models?: AgentModels; real?: () => Date } = {},
 ): Promise<CopilotAnswer> {
-  const models = deps.models ?? modelsFromEnv();
+  const models = deps.models ?? (await budgetedModels(db));
   const real = deps.real ?? (() => new Date());
   const cited = new Map<string, Citation>();
   const cite = (c: Citation) => cited.set(`${c.kind}:${c.id}`, c);

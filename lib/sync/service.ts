@@ -17,7 +17,8 @@ const SYNC_LOCK_KEY = 7_240_001;
 
 export type SyncOutcome =
   | { ok: true; response: SyncResponse }
-  | { ok: false; status: 403; error: string };
+  | { ok: false; status: 403; error: string }
+  | { ok: false; status: 429; error: "rate_limited"; retryAfterSec: number };
 
 export async function processSync(
   db: Db,

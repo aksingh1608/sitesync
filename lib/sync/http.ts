@@ -30,7 +30,13 @@ export async function handleSync(
       delayMs: opts.retryDelayMs,
       onRetry: (err) => console.warn("[api/sync] transient database error, retrying once:\n" + describeError(err)),
     });
-    if (!outcome.ok) return json({ error: outcome.error }, outcome.status);
+    if (!outcome.ok) {
+      if (outcome.status === 429) {
+        // Not an error the client should surface: it keeps the events and backs off.
+        return json({ error: outcome.error, retryable: true }, 429, { "retry-after": String(outcome.retryAfterSec) });
+      }
+      return json({ error: outcome.error }, outcome.status);
+    }
     return json(outcome.response);
   } catch (err) {
     if (isTransientDbError(err)) {

@@ -322,8 +322,13 @@ Measured locally (Opus 5.5, effort low; Neon is slow from this machine): dispatc
 - **Vercel limits checked (2026-11-18, Hobby)**: functions 300 s default and max (ours <= 120 s),
   2 GB memory, 4.5 MB request body (uploads capped at 4 MB), cron once a day with +-59 min
   precision (ours: `0 13 * * *`), 100 crons per project.
-- **Databases**: `.env.local` points at a separate dev database (not production). Production and
-  Preview on Vercel shared the production database; the plan is to point Preview at the dev one.
+- **Databases (corrected 2026-11-18)**: `.env.local` points at the **production** database (the
+  same one Vercel Production uses; Preview has its own `DATABASE_URL` entry, value unknown).
+  `vercel env pull` cannot read sensitive vars (it writes "[SENSITIVE]"), so compare by
+  behaviour, not by pulling. Local `db:migrate`, `db:seed`, Reset demo, `demo:dryrun` and
+  `e2e:agents` therefore change the live demo. A separate Neon dev branch is still TODO.
+- **Production migrations** run inside the Vercel build (`vercel.json` buildCommand ->
+  `db/migrate-on-deploy.ts`, production only); a failed migration fails the build.
 - Docs: `docs/demo-script.md`, `docs/interview-qa.md`, `docs/backup-plan.md`,
   `docs/architecture.md`, `docs/device-test.md` (checklist + results), `docs/prompts/` (day plans).
 

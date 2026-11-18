@@ -32,7 +32,7 @@ The demo runs on free tiers (Vercel Hobby, Neon free Postgres, Vercel Blob). AI 
 One codebase, installable from the browser, updates without an app store, and works offline with a service worker. The trade-off: on iPhone, push notifications need the app added to the Home Screen and there is no background sync.
 
 ## What was built with AI assistance?
-_(Adjust to your own account.)_ The code was written over six days with an AI coding assistant (Claude Code) working from day plans I wrote (`docs/prompts/`). I set the architecture rules, reviewed the output, ran the tests and did the real-device testing. The test suite (200+ tests) runs without any AI calls.
+_(Adjust to your own account.)_ The code was written over six days with an AI coding assistant (Claude Code) working from day plans I wrote. I set the architecture rules, reviewed the output, ran the tests and did the real-device testing. The test suite (200+ tests) runs without any AI calls.
 
 ## What are the known weak spots?
 - Demo-mode identity: no real login.

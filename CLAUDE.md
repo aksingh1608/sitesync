@@ -335,7 +335,7 @@ Measured locally (Opus 5.5, effort low; Neon is slow from this machine): dispatc
 - **Production migrations** run inside the Vercel build (`vercel.json` buildCommand ->
   `db/migrate-on-deploy.ts`, production only); a failed migration fails the build.
 - Docs: `docs/demo-script.md`, `docs/interview-qa.md`, `docs/backup-plan.md`,
-  `docs/architecture.md`, `docs/device-test.md` (checklist + results), `docs/prompts/` (day plans).
+  `docs/architecture.md`, `docs/device-test.md` (checklist + results).
 
 ## Media (private Vercel Blob store)
 
@@ -457,7 +457,7 @@ tests/  Vitest: sync, day2 (authz, revocations, paging, media; PGlite), reducers
         agents-report, agents-dispatch, agents-digest-copilot (mocked models via ai/test;
         agent-mocks.ts). Tests never call a real AI API.
 scripts/gen-icons.ts     PWA icons: sync ring + bolt (no deps); e2e-agents.ts, demo-dryrun.ts
-docs/                    demo-script, interview-qa, backup-plan, architecture, device-test, prompts/
+docs/                    demo-script, interview-qa, backup-plan, architecture, device-test
 ```
 
 ## Commands

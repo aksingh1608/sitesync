@@ -2,9 +2,9 @@
 // fallback, dedupe, the urgent safety task, and that it acts only as the
 // note's author through events. No real API calls.
 import { MockLanguageModelV4, MockTranscriptionModelV4 } from "ai/test";
+import { mockLanguage, models } from "./agent-mocks";
 import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { AgentModels } from "@/lib/agents/ai";
 import {
   fallbackExtract,
   needsReport,
@@ -22,36 +22,6 @@ import type { Db } from "@/lib/sync/store-drizzle";
 import { ids, makeDb, NOW, sync, uuid } from "./helpers";
 
 const DEMO = "Finished the north lot fixtures, we need 40 more LED panels, and there's an exposed wire near the loading dock";
-const usage = {
-  inputTokens: { total: 300, noCache: 300, cacheRead: undefined, cacheWrite: undefined },
-  outputTokens: { total: 120, text: 120, reasoning: undefined },
-};
-
-export function mockLanguage(json: unknown, calls?: { n: number }) {
-  return new MockLanguageModelV4({
-    modelId: "claude-opus-5-5",
-    doGenerate: async () => {
-      if (calls) calls.n++;
-      return {
-        content: [{ type: "text", text: typeof json === "string" ? json : JSON.stringify(json) }],
-        finishReason: { unified: "stop", raw: undefined },
-        usage,
-        warnings: [],
-      };
-    },
-  });
-}
-
-export function models(language: unknown = null, transcription: unknown = null): AgentModels {
-  return {
-    language: language as AgentModels["language"],
-    languageId: language ? "claude-opus-5-5" : null,
-    providerOptions: undefined,
-    transcription: transcription as AgentModels["transcription"],
-    transcriptionId: transcription ? "gpt-4o-mini-transcribe" : null,
-  };
-}
-
 const extraction: Extraction = {
   summary: "North lot fixtures finished; LED panels needed; exposed wire at the loading dock.",
   workDone: ["Finished the north lot fixtures"],

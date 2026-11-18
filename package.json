@@ -15,7 +15,8 @@
     "db:seed": "tsx db/seed.ts",
     "db:studio": "drizzle-kit studio",
     "icons": "tsx scripts/gen-icons.ts",
-    "e2e:office": "node scripts/e2e-office.mjs"
+    "e2e:office": "node scripts/e2e-office.mjs",
+    "e2e:agents": "tsx scripts/e2e-agents.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "4.0.96",

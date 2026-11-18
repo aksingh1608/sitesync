@@ -42,6 +42,14 @@ export const TOOLS_BY_ROLE: Record<Role, readonly string[]> = {
   foreman: ["listSites", "getSiteStatus", "listTasks", "getWorker"],
 };
 
+/** Words people use for a site that are not in its name ("the hospital job"). */
+const SITE_SYNONYMS: Record<string, string[]> = {
+  hospital: ["medical", "health", "clinic"],
+  medical: ["hospital"],
+  clinic: ["medical"],
+  shop: ["store", "goods"],
+};
+
 const fmt = (d: string | Date | null) => (d ? formatInZone(d, BRANCH_TIMEZONE) : null);
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9#]+/g, " ").trim();
 
@@ -82,7 +90,13 @@ export function copilotData(db: Db, actor: CopilotActor, now: Date) {
       s.sites.find((x) => norm(x.name) === n) ??
       (num ? s.sites.find((x) => new RegExp(`#${num}\\b`).test(x.name)) : undefined) ??
       s.sites.find((x) => norm(x.name).includes(n)) ??
-      s.sites.find((x) => n.split(" ").filter((w) => w.length > 3).some((w) => norm(x.name).includes(w))) ??
+      s.sites.find((x) =>
+        n
+          .split(" ")
+          .filter((w) => w.length > 3)
+          .flatMap((w) => [w, ...(SITE_SYNONYMS[w] ?? [])])
+          .some((w) => norm(x.name).includes(w)),
+      ) ??
       null
     );
   };

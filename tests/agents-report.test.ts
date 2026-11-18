@@ -60,7 +60,8 @@ describe("eligibility", () => {
   it("reads long text notes and uploaded voice notes only", () => {
     const base = { processedAt: null, blobPath: null };
     expect(needsReport({ ...base, kind: "text", text: "on my way" })).toBe(false);
-    expect(needsReport({ ...base, kind: "text", text: DEMO + " " + DEMO })).toBe(true);
+    expect(needsReport({ ...base, kind: "text", text: DEMO })).toBe(true); // exactly 20 words
+    expect(needsReport({ ...base, kind: "text", text: DEMO.split(" ").slice(1).join(" ") })).toBe(false);
     expect(needsReport({ ...base, kind: "voice", text: null })).toBe(false); // not uploaded yet
     expect(needsReport({ ...base, kind: "voice", text: null, blobPath: "notes/x/y.webm" })).toBe(true);
     expect(needsReport({ ...base, kind: "photo", text: null, blobPath: "notes/x/y.jpg" })).toBe(false);
@@ -228,5 +229,34 @@ describe("runReportAgent", () => {
     expect(done[0]).toMatchObject({ status: "ok" });
     const [note] = await db.select().from(fieldNotes).where(eq(fieldNotes.id, noteId));
     expect(note.processedAt).not.toBeNull();
+  });
+});
+
+describe("follow-up dedupe against materials and safety", () => {
+  it("drops follow-ups that restate a material or a safety issue", () => {
+    const ctx = {
+      note: { id: "f0000000-0000-4000-8000-000000000009", personId: ids.techA, siteId: ids.siteA, taskId: null, kind: "text" as const },
+      authorName: "Tess",
+      siteName: "Site A",
+      task: null,
+      coordinatorId: ids.coordinator,
+      now: NOW,
+    };
+    const x: Extraction = {
+      summary: "",
+      workDone: [],
+      materialsUsed: [],
+      materialsNeeded: [{ item: "LED panels", qty: 40 }],
+      blockers: [],
+      safetyIssues: ["Exposed wire near the loading dock"],
+      followUps: [
+        { title: "Order 40 LED panels", assigneeRole: "coordinator", dueInDays: 1 },
+        { title: "Make safe exposed wire near loading dock", assigneeRole: "coordinator", dueInDays: 0 },
+        { title: "Confirm lift rental for Thursday", assigneeRole: "coordinator", dueInDays: 1 },
+      ],
+    };
+    const plan = planReportTasks(x, ctx);
+    expect(plan.tasks.map((t) => t.title)).toEqual(["Confirm lift rental for Thursday", "Material: 40 × LED panels", "Safety: Exposed wire near the loading dock"]);
+    expect(plan.notes).toHaveLength(2);
   });
 });

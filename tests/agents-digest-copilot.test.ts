@@ -61,6 +61,8 @@ describe("number check", () => {
   it("finds numbers that are not in the data", async () => {
     const n = await computeDigestNumbers(db, DAY, NOW);
     expect(numbersIn("3 tasks, 4.5 hours at #106")).toEqual([3, 4.5, 106]);
+    expect(numbersIn("six sites and twelve tasks")).toEqual([6, 12]);
+    expect(checkNarrative("Six tasks are late.", n)).toEqual([6]);
     expect(checkNarrative("1 task completed; 1 blocked; 2 not acknowledged; 4 hours at Store 1.", n)).toEqual([]);
     expect(checkNarrative("17 tasks completed, up 25% on yesterday.", n)).toEqual([17, 25]);
     // The template only ever uses the data's own numbers.
@@ -146,6 +148,16 @@ describe("copilot tools", () => {
     expect(unacked.answer).toContain("Exposed junction box");
     expect(unacked.answer).not.toContain("Label circuits");
     expect((await fallbackAnswer("Which rollout stores are behind?", tools)).toolCalls).toEqual(["getRolloutStatus"]);
+  });
+
+  it("finds a site by a word people use for it (hospital -> Medical Center)", async () => {
+    const { sites } = await import("@/lib/db/schema");
+    const { eq } = await import("drizzle-orm");
+    await db.update(sites).set({ name: "Northfield Medical Center - East Wing" }).where(eq(sites.id, ids.siteA));
+    const tools = copilotTools(db, { id: ids.coordinator, role: "coordinator" }, NOW, noop);
+    const r = await fallbackAnswer("Who is at the hospital job and what's blocked?", tools);
+    expect(r.answer).toContain("Northfield Medical Center");
+    expect(r.answer).toContain("Pull feeders to panel B");
   });
 });
 

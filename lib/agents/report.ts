@@ -23,7 +23,7 @@ import { tokenCostUsd, transcriptionCostUsd } from "./pricing";
 import { finishRun, startRun } from "./runs";
 
 export const REPORT_AGENT = "report_agent" as const;
-/** Text notes shorter than this are left alone (a quick "on my way" is not a report). */
+/** Text notes with fewer words are left alone (a quick "on my way" is not a report). */
 export const REPORT_MIN_WORDS = 20;
 /** Caps on what one note can create. */
 export const MAX_FOLLOW_UPS = 5;
@@ -36,7 +36,7 @@ const wordCount = (s: string | null | undefined) => (s ?? "").trim().split(/\s+/
 export function needsReport(n: Pick<FieldNote, "kind" | "text" | "blobPath" | "processedAt">): boolean {
   if (n.processedAt) return false;
   if (n.kind === "voice") return n.blobPath !== null; // after note.media_uploaded
-  if (n.kind === "text") return wordCount(n.text) > REPORT_MIN_WORDS;
+  if (n.kind === "text") return wordCount(n.text) >= REPORT_MIN_WORDS;
   return false;
 }
 
@@ -63,13 +63,14 @@ export const ExtractionSchema = z.object({
       }),
     )
     .max(5)
-    .describe("Concrete next actions the office or the worker must take. Not materials or safety issues (those are handled separately)."),
+    .describe("Other concrete next actions only. NEVER repeat a material need or a safety issue here: those already become their own tasks. Usually empty."),
 });
 export type Extraction = z.infer<typeof ExtractionSchema>;
 
 const SYSTEM = `You turn a field note from an electrician into a structured daily log for the office of Demo Electrical Co.
 Extract only what the note says. Never invent work, quantities or problems. Use empty lists when nothing applies.
-Keep each item short (under 12 words). Quantities are numbers or null.`;
+Keep each item short (under 12 words). Quantities are numbers or null.
+Materials needed and safety issues each become their own task automatically, so do not list them again as follow-ups.`;
 
 const emptyExtraction = (summary: string): Extraction => ({
   summary,
@@ -146,6 +147,11 @@ export type PlannedTask = {
 };
 
 const DAY = 86_400_000;
+const STOPWORDS = new Set(["the", "a", "an", "and", "or", "of", "for", "to", "at", "on", "in", "near", "more", "new", "extra", "some", "order", "get", "need", "needs", "make", "safe", "fix", "check", "there", "is", "are", "by"]);
+/** Significant words of a phrase (plural "s" removed), for overlap checks. */
+function keywords(s: string): Set<string> {
+  return new Set(s.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 1 && !STOPWORDS.has(w)).map((w) => w.replace(/s$/, "")));
+}
 const qtyText = (m: { item: string; qty: number | null | undefined }) => (m.qty ? `${m.qty} × ${m.item}` : m.item);
 
 /**
@@ -154,6 +160,15 @@ const qtyText = (m: { item: string; qty: number | null | undefined }) => (m.qty 
  */
 export function planReportTasks(x: Extraction, ctx: ReportContext): { tasks: PlannedTask[]; notes: string[] } {
   const notes: string[] = [];
+  // A follow-up that restates a material or a safety issue would be a second
+  // task for the same thing (the material request / safety task covers it).
+  const covered = [...x.materialsNeeded.map((m) => m.item), ...x.safetyIssues].map(keywords);
+  const followUps = x.followUps.filter((f) => {
+    const k = keywords(f.title);
+    const dup = covered.some((c) => [...c].filter((w) => k.has(w)).length >= Math.min(2, c.size));
+    if (dup) notes.push(`follow-up "${f.title}" dropped: covered by a material request or safety task`);
+    return !dup;
+  });
   const out: PlannedTask[] = [];
   const from = `From ${ctx.authorName}'s ${ctx.note.kind} note at ${ctx.siteName} (created by the report agent).`;
   const add = (kind: "follow_up" | "material" | "safety", i: number, t: Omit<PlannedTask, "taskId" | "eventId">) =>
@@ -164,7 +179,7 @@ export function planReportTasks(x: Extraction, ctx: ReportContext): { tasks: Pla
       eventId: stableUuid(`report-event:${ctx.note.id}:${kind}:${i}`),
     });
 
-  x.followUps.slice(0, MAX_FOLLOW_UPS).forEach((f, i) => {
+  followUps.slice(0, MAX_FOLLOW_UPS).forEach((f, i) => {
     // "assignee" only when the note is on a task and its assignee is the author
     // (that is who the agent acts as; anyone else needs a coordinator).
     const self = f.assigneeRole === "assignee" && ctx.task && ctx.task.assigneeId === ctx.note.personId;
@@ -405,7 +420,7 @@ export async function runReportAgent(db: Db, noteId: string, opts: { trigger: st
       tokensOut: usage?.outputTokens ?? null,
       latencyMs: transcribeMs + x.latencyMs,
       costUsd: llmCost === null && transcribeCost === null ? null : (llmCost ?? 0) + (transcribeCost ?? 0),
-      error: x.mode === "fallback" ? x.error : null,
+      error: x.mode === "fallback" ? (transcriptError ?? x.error) : null,
       notes: runNotes,
       now: now(),
     });

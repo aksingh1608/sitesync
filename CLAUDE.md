@@ -111,6 +111,9 @@ Receipts from the device: `task.delivered` once per device+person after a task f
 the server; `task.seen` the first time the detail opens; `task.acknowledged` from "Got it".
 "Once" is enforced by Dexie `receiptMarks` (survives cache rebuilds), not by the server.
 
+Day 5: `note.processed { noteId, transcript, report }` (**server-only**, written by the field report
+agent as the note's author; first one wins; sets `field_notes.transcript/report/processed_at`).
+
 **Server-only events** (`SERVER_ONLY_EVENT_TYPES` in `lib/events.ts`): `/api/sync` rejects them
 from devices with `forbidden` and does not store them. Server code creates them with
 `processSync(db, req, { trusted: true, skipPull: true })`, deviceId `server:media`, and a
@@ -221,6 +224,66 @@ never in reducers.**
   escalation timeline in the task drawer (next to receipts), `/office/sms` log, office
   "Enable notifications" button in the demo clock bar.
 
+## AI agents (Day 5)
+
+`lib/agents/`. **AI handles messy input; rules handle anything that must be reliable.** Agents never
+send SMS, escalate or approve timesheets; they suggest, people decide (anything that assigns work to
+a person needs a coordinator's approval). Agents run on the server only (`after()` or an office
+action); the phone never calls an AI API and an agent can never block or fail a sync.
+- **Models** (`ai.ts`): AI SDK 7 (`ai@7.0.162`, `@ai-sdk/anthropic`, `@ai-sdk/openai`, pinned).
+  `ANTHROPIC_MODEL` (default `claude-opus-5-5`), `ANTHROPIC_EFFORT` (default `low`; Opus 5.5 always
+  thinks, effort is the latency/cost lever), `OPENAI_TRANSCRIPTION_MODEL` (default
+  `gpt-4o-mini-transcribe`). `MAX_OUTPUT_TOKENS` 1200, `AGENT_TIMEOUT_MS` 20 s, `maxRetries` 1.
+- **Fallback** (`withFallback`): no key, timeout, error, or output that fails the Zod schema / our
+  validation -> a deterministic rule-based result, labelled **"Fallback (AI unavailable)"** in the UI.
+  Never throws for model problems.
+- **Logging**: every run is an `agent_runs` row (agent, trigger, actor, subject, input summary,
+  output, status running|ok|fallback|error, model, tokens, latency, cost estimate from
+  `pricing.ts`, error, validation notes), written before the call and finished after it.
+  Unique `(agent, subject_id)` (partial index) = a note / draft is claimed by one run; a run stuck
+  in `running` > 5 min or ended in `error` > 1 min may be retried (`startRun`). `/office/agents`.
+- **Agent writes are events**: from device `agent:<agent>` with deterministic ids (`stableUuid`),
+  so a repeated run is a duplicate, never a second task.
+
+Agents:
+1. **Dispatch** (`dispatch.ts`, `/office/dispatch`, coordinator/manager): free-text request (+
+   optional site) -> draft in `dispatch_drafts` (office-only state, like escalations). The model
+   sees short refs (S1, P2), never uuids; `validateDispatch` drops refs that don't exist, inactive
+   or wrong-trade assignees (filled from `suggestAssignees`), bad due dates; the form's site wins.
+   Approve (`/api/office/dispatch/decide`) claims the draft (pending -> approved) then creates the
+   task through `processSync` **as the coordinator**, `source: dispatch_agent`, task id = draft id;
+   a refused event reverts the claim. Reject needs a reason. "Inject sample request" (3 samples).
+2. **Field report** (`report.ts`): voice notes after `note.media_uploaded`, text notes of >= 20
+   words. Triggers: `after()` in `/api/sync` (pending notes, up to 3) and `/api/media` (that note),
+   plus one per office snapshot poll as a safety net (`hooks.ts`). Transcribe (OpenAI) -> extract
+   (Zod schema) -> tasks **as the note's author** via `processSync` (existing authz: follow-ups /
+   material requests to a coordinator, own follow-ups): follow-ups (coordinator, or the author if
+   it is their task), one `material_request` per material needed, one **urgent** follow-up
+   "Safety: ..." per safety issue (the Day 4 `ack` rule then notifies the coordinator). Follow-ups
+   that restate a material/safety item are dropped. Then `note.processed`. Ids from
+   (note, kind, index). Fallback: keyword extraction (`fallbackExtract`). Without
+   `OPENAI_API_KEY` a voice note gets no transcript (reason stored in `report.transcriptError`).
+   Shown on the field Notes screen and in the task drawer (also "From this field note" on tasks
+   the agent created, found via `field_notes.report->createdTasks`).
+3. **Digest** (`digest.ts`, `/office/digest`): numbers first, from the dashboard's own code
+   (`loadSnapshot` + `derive` for "now" counts, `teamStats` for completions, the event log for the
+   day: material requests, safety tasks, hours, stage moves). The model writes only the narrative;
+   `checkNarrative` rejects any number (digits or number words) not in the data -> template.
+   Stored in `digests` (latest per day shown). Triggers: "Generate today's digest" (demo-clock
+   today) and the daily cron (`/api/escalations/run` GET also writes **yesterday's** digest).
+   "Send to manager" pushes to active managers (`pushToPeople` now also takes `{url, tag}`).
+4. **Ops copilot** (`copilot.ts`, drawer on every office page): read-only tools `listSites,
+   getSiteStatus, listTasks, getWorker, getRolloutStatus, getTimesheetFlags` over one snapshot per
+   question (fixed, parameterized queries; no SQL from the model), chosen by role
+   (`TOOLS_BY_ROLE`: HR has no rollout tool; field roles would see only their own work). Max 5
+   steps (`isStepCount`). Answers cite records as links (`/office/tasks?task=|site=|assignee=`;
+   the task table reads `site`/`assignee` params); every record a tool returned is also listed.
+   Fallback: keyword routing to one tool (site synonyms: hospital -> Medical).
+
+Measured locally (Opus 5.5, effort low; Neon is slow from this machine): dispatch 5-8 s,
+~$0.016/run; report extraction ~4.7 s, ~$0.004 (end to end after a sync ~25 s locally); digest
+~7 s, ~$0.017; copilot 8-16 s (2-3 tool steps), ~$0.04. Fallbacks: < 3 s, $0.
+
 ## Media (private Vercel Blob store)
 
 Voice (MediaRecorder; mime picked with `isTypeSupported`, iOS gives audio/mp4; 2 min cap) and
@@ -292,6 +355,8 @@ app/
   api/escalations/run/   GET (Vercel cron) / POST: run the rules, Bearer CRON_SECRET
   api/push/subscribe/    POST / DELETE push subscriptions
   api/office/            + demo-clock, escalations/handle, sms (log, demo recipient, test SMS)
+  api/office/            + dispatch (+decide), digest (+send), copilot, agents (Day 5)
+  office/                + dispatch, digest, agents pages (Day 5)
   t/[code]/              short task link for SMS
   serwist/[path]/route.ts, sw.ts, manifest.ts, layout.tsx
 components/              sync-manager (triggers + upload hook), update-banner, sync-status, use-local,
@@ -320,14 +385,19 @@ lib/
   push/                  send (web-push, server), client (support checks, subscribe)
   sms/                   provider (interface, mock, routing), twilio (REST), send (log rows)
   tasks/grouping.ts      Overdue / Today / Next 7 days / Later / Follow-ups (rolling, branch tz)
+  agents/                ai (models, fallback), runs (agent_runs), pricing, ids, hooks (after-sync),
+                         dispatch, report, digest, copilot
 lib/office/              auth (office actor), queries (server reads + SQL stats), rules, derive,
                          timesheets (rows + CSV), route (GET wrapper)
-components/office/       data (polling, writes via /api/sync), shell, ui, tasks
+components/office/       data (polling, writes via /api/sync), shell, ui, tasks, agents (copilot, badges)
+components/agent-report.tsx  report agent output (field Notes + office drawer)
 db/  migrations/ (drizzle-kit), migrate.ts, seed.ts, seed-data.ts, seed-fast.ts, connect.ts
 tests/  Vitest: sync, day2 (authz, revocations, paging, media; PGlite), reducers, client,
         client-day2, media (fake-indexeddb + PGlite), grouping, seed, field, day3 (office events,
         devices), office (rules + queries on the seed), escalation-rules (pure, fixed clock),
-        escalation-run (PGlite: demo flow, concurrency, push cleanup, SMS routing, throttle)
+        escalation-run (PGlite: demo flow, concurrency, push cleanup, SMS routing, throttle),
+        agents-report, agents-dispatch, agents-digest-copilot (mocked models via ai/test;
+        agent-mocks.ts). Tests never call a real AI API.
 scripts/gen-icons.ts     placeholder PWA icons (no deps)
 ```
 
@@ -342,6 +412,9 @@ pnpm db:studio
 pnpm icons         # regenerate placeholder icons
 CODE=… BASE=http://localhost:3100 pnpm e2e:office   # headless Playwright: /office per role +
                    # two-context receipt test; screenshots in /tmp/sitesync-office (creates 1 task)
+BASE=http://localhost:3100 pnpm e2e:agents [--fallback]   # Day 5 definition of done against a
+                   # running server (REAL model calls, ~$0.25 a run; writes demo data). --fallback: start
+                   # the server with ANTHROPIC_API_KEY= OPENAI_API_KEY= and assert every agent falls back
 ```
 
 Secrets only in `.env.local` (gitignored). `.env.example` lists every key:
@@ -349,7 +422,9 @@ Secrets only in `.env.local` (gitignored). `.env.example` lists every key:
 `DEMO_ACCESS_CODE` (access gate; required in production), `SITESYNC_LOCAL_MEDIA` (optional dev flag),
 Day 4: `NEXT_PUBLIC_VAPID_PUBLIC_KEY` (build-time, starts with "B", 87 chars), `VAPID_PRIVATE_KEY`,
 `VAPID_SUBJECT`, `CRON_SECRET`, `SMS_PROVIDER` (mock|twilio), `TWILIO_ACCOUNT_SID`,
-`TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`, `SMS_DEMO_TO_NUMBER`; and later-day keys.
+`TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`, `SMS_DEMO_TO_NUMBER`; Day 5: `ANTHROPIC_API_KEY`,
+`ANTHROPIC_MODEL`, `ANTHROPIC_EFFORT`, `OPENAI_API_KEY`, `OPENAI_TRANSCRIPTION_MODEL` (all optional:
+missing keys mean rule-based fallbacks).
 On Vercel, `vercel env ls` shows a "Config" (non-sensitive) value as an encrypted `eyJ2…`
 envelope (base64 of `{"v`), not the value itself.
 
@@ -376,11 +451,26 @@ envelope (base64 of `{"v`), not the value itself.
 4. **Day 4 (done): escalation + push.** Demo clock, pure escalation rules, claim-once runner,
    Web Push (field + office), SMS fallback (mock / Twilio for one demo recipient), alerts panel,
    escalation timeline, SMS log, daily cron safety net.
-5. **Day 5: AI agents.** Dispatch agent (suggest assignee), field report agent (voice note →
-   transcript → structured report/follow-ups), digest agent (`digests`), ops copilot.
+5. **Day 5 (done): AI agents.** Dispatch agent (draft -> human approval), field report agent
+   (voice/text note -> transcript -> structured log, follow-ups, material requests, urgent safety
+   task), daily digest (checked numbers), ops copilot (read-only tools), agent activity page.
 6. **Day 6: polish + demo.** Deploy to Vercel, demo script, airplane-mode walkthrough, hardening.
 
-## Known gaps (after Day 4)
+## Known gaps (after Day 5)
+
+- Voice transcription needs `OPENAI_API_KEY`; without it voice notes are logged with no
+  transcript and the report agent creates nothing from them (text notes still work by rules).
+- The field report agent runs after the sync/upload response (`after()`), or on the next office
+  poll; a crashed run is retried after 5 min. If no office tab is open and no one syncs, a waiting
+  note waits too. Locally a note -> tasks takes ~20-25 s (slow Neon route); the model part ~5 s.
+- The report agent dedupes by (note, kind, index): if a note were processed twice with different
+  model output, index i maps to the first run's task (no second task, but not re-titled).
+- The digest number check only sees numbers (digits and common number words); it cannot catch a
+  wrong claim without a number ("most sites are on track"). The "now" counts in a digest for a
+  past day are as of generation time, not that day's end.
+- Copilot answers in one turn (no chat memory). Its links open the task table filtered by
+  site/assignee (there is no site or person page).
+- Costs are list-price estimates (`pricing.ts`), not the provider's bill.
 
 - Escalations run only when something calls them (syncs, dashboard polls, clock moves, the
   daily cron). On Hobby there is no frequent cron, so with every app closed a step can be late

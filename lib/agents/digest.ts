@@ -172,8 +172,19 @@ export function templateNarrative(n: DigestNumbers): DigestNarrative {
   return { branch, sites: n.sites.map((s) => ({ siteId: s.siteId, summary: `${describe(s)}.` })), highlights };
 }
 
-/** Every number written in the text (digits only: "40", "3.5", "#106"). */
-export const numbersIn = (text: string) => (text.match(/\d+(?:\.\d+)?/g) ?? []).map(Number);
+const WORD_NUMBERS: Record<string, number> = {
+  zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+  eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18,
+  nineteen: 19, twenty: 20, thirty: 30, forty: 40, fifty: 50, hundred: 100, dozen: 12, half: 0.5,
+};
+/**
+ * Every number written in the text: digits ("40", "3.5", "#106") and number
+ * words ("six"), so spelling a number out cannot get past the check.
+ */
+export const numbersIn = (text: string) => [
+  ...(text.match(/\d+(?:\.\d+)?/g) ?? []).map(Number),
+  ...(text.toLowerCase().match(/\b[a-z]+\b/g) ?? []).filter((w) => w in WORD_NUMBERS).map((w) => WORD_NUMBERS[w]),
+];
 
 /**
  * The anti-invention check: every number in the narrative must appear in the
@@ -190,15 +201,21 @@ export function checkNarrative(text: string, n: DigestNumbers): number[] {
   for (const m of n.moves) addAll(numbersIn(m.name));
   addAll(numbersIn(n.day)); // 2026, 11, 18
   addAll(n.day.split("-").map(Number));
+  allowed.add(n.sites.length).add(n.moves.length).add(1); // "listed sites", "one site", "a"
   return [...new Set(numbersIn(text).filter((v) => !allowed.has(v)))];
 }
 
 const SYSTEM = `You write the end-of-day digest for the branch manager of Demo Electrical Co., an electrical contractor.
-Use ONLY the numbers given. Never compute new numbers (no sums, differences or percentages) and never invent any.
+Use ONLY the numbers given, written exactly as given. Never count, add, subtract or compare anything yourself
+(no "6 sites", no totals, no percentages) and never invent a number. A checker rejects any number not in the input.
 Plain, short sentences. Lead with what needs attention (safety, blocked, not acknowledged, overdue). Site summaries only for the listed sites, by ref.`;
 
 function digestPrompt(n: DigestNumbers, refs: Map<string, string>): string {
-  const lines = [`Day: ${n.day} (branch time). "now" counts are as of the time of writing.`, `Branch: ${describe(n.branch) || "no activity"}`];
+  const lines = [
+    `Day: ${n.day} (branch time). "now" counts are as of the time of writing.`,
+    `Branch: ${describe(n.branch) || "no activity"}`,
+    `Sites with activity (${n.sites.length}):`,
+  ];
   for (const s of n.sites) lines.push(`${refs.get(s.siteId)} ${s.name}: ${describe(s)}`);
   if (n.moves.length) lines.push(`Rollout stage moves: ${n.moves.map((m) => `${m.name} ${m.from} -> ${m.to}`).join("; ")}`);
   return lines.join("\n");

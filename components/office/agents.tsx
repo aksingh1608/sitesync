@@ -3,7 +3,8 @@
 // a small POST helper and the ops copilot panel (a drawer on every office page).
 import { Bot, Send } from "lucide-react";
 import Link from "next/link";
-import { Fragment, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
+import type { Role } from "@/lib/domain";
 import { cn } from "@/lib/utils";
 import { Drawer, ErrorLine, Pill } from "./ui";
 
@@ -113,9 +114,20 @@ type Citation = { kind: "task" | "site" | "person"; id: string; label: string; h
 type Answer = { answer: string; citations: Citation[]; mode: "ai" | "fallback"; steps: number; toolCalls: string[] };
 type Turn = { q: string; a: Answer | null; error: string | null; ms: number | null };
 
-const EXAMPLES = ["Who is at the hospital job and what's blocked?", "Which rollout stores are behind?", "Who hasn't acknowledged urgent tasks today?"];
+type CopilotStatus = { ai: boolean; reason: "no_key" | "daily_cap" | null; tools: string[] };
 
-export function CopilotButton() {
+/** Examples per role: HR has no rollout tool, so no rollout question. */
+const EXAMPLES: Partial<Record<Role, string[]>> & { default: string[] } = {
+  default: ["Who is at the hospital job and what's blocked?", "Which rollout stores are behind?", "Who hasn't acknowledged urgent tasks today?"],
+  hr: ["Which timesheets are flagged this week?", "Who is clocked in right now?", "Who hasn't acknowledged urgent tasks today?"],
+};
+
+const AI_OFF: Record<NonNullable<CopilotStatus["reason"]>, string> = {
+  no_key: "AI is not configured on this server (no Anthropic API key). The copilot still answers with a rule-based lookup (one tool, picked by keywords), labelled \u201cFallback (AI unavailable)\u201d.",
+  daily_cap: "Today's AI budget is used up. Until it resets, the copilot answers with a rule-based lookup, labelled \u201cFallback (AI unavailable)\u201d.",
+};
+
+export function CopilotButton({ role }: { role: Role }) {
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -127,16 +139,36 @@ export function CopilotButton() {
         <Bot className="size-4" /> Ask ops copilot
       </button>
       <Drawer open={open} onClose={() => setOpen(false)} title="Ops copilot">
-        <CopilotChat />
+        <CopilotChat role={role} />
       </Drawer>
     </>
   );
 }
 
-function CopilotChat() {
+function CopilotChat({ role }: { role: Role }) {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<CopilotStatus | null>(null);
+  const [statusError, setStatusError] = useState<string | null>(null);
+  const endRef = useRef<HTMLDivElement>(null);
+  const examples = EXAMPLES[role] ?? EXAMPLES.default;
+
+  useEffect(() => {
+    let live = true;
+    fetch("/api/office/copilot", { cache: "no-store" })
+      .then(async (res) => {
+        if (!live) return;
+        if (res.ok) return setStatus((await res.json()) as CopilotStatus);
+        setStatusError(res.status === 401 ? "Access code needed: reload the page." : res.status === 503 ? "The database didn't answer. Questions may fail; try again in a few seconds." : `Copilot status: HTTP ${res.status}`);
+      })
+      .catch(() => live && setStatusError("No connection. The copilot needs to be online."));
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  useEffect(() => endRef.current?.scrollIntoView({ block: "end" }), [turns]);
 
   async function ask(question: string) {
     if (!question.trim() || busy) return;
@@ -149,18 +181,26 @@ function CopilotChat() {
   }
 
   return (
-    <div className="flex flex-col gap-3 text-sm" data-testid="copilot">
+    <div className="flex min-h-0 flex-1 flex-col gap-3 text-sm" data-testid="copilot">
       <p className="text-xs text-muted-foreground">
         Read-only: it looks things up with fixed queries scoped to your role and cites the records it used. It cannot assign, change or send anything.
+        {status && <> Your tools: {status.tools.join(", ")}.</>}
       </p>
+      {status && !status.ai && status.reason && (
+        <p role="status" className="rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs text-amber-950 dark:bg-amber-950 dark:text-amber-100" data-testid="copilot-ai-off">
+          {AI_OFF[status.reason]}
+        </p>
+      )}
+      <ErrorLine error={statusError} />
       <div className="flex flex-wrap gap-1.5">
-        {EXAMPLES.map((e) => (
+        {examples.map((e) => (
           <button key={e} disabled={busy} onClick={() => ask(e)} className="rounded-full border px-2 py-0.5 text-xs hover:bg-muted disabled:opacity-50">
             {e}
           </button>
         ))}
       </div>
-      <div className="space-y-3">
+      <div className="flex-1 space-y-3" data-testid="copilot-messages">
+        {turns.length === 0 && <p className="text-xs text-muted-foreground">Ask a question below, or tap an example.</p>}
         {turns.map((t, i) => (
           <Fragment key={i}>
             <div className="ml-8 rounded-lg bg-muted px-3 py-2">{t.q}</div>
@@ -194,13 +234,14 @@ function CopilotChat() {
             </div>
           </Fragment>
         ))}
+        <div ref={endRef} />
       </div>
       <form
         onSubmit={(e) => {
           e.preventDefault();
           void ask(q);
         }}
-        className={cn("sticky bottom-0 flex gap-2 bg-background pt-2")}
+        className={cn("sticky bottom-0 -mb-4 flex gap-2 border-t bg-background py-3")}
       >
         <input
           value={q}

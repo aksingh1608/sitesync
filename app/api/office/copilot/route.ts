@@ -1,9 +1,13 @@
+// GET: is the AI available for the copilot (so the panel can say so up front), and which
+// tools the caller's role gets.
 // POST { question }: the ops copilot (read-only tools scoped to the caller's role).
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
-import { askCopilot } from "@/lib/agents/copilot";
+import { aiDailyCap, aiRunsLast24h } from "@/lib/agents/budget";
+import { askCopilot, TOOLS_BY_ROLE } from "@/lib/agents/copilot";
+import { modelsFromEnv } from "@/lib/agents/ai";
 import { loadClock } from "@/lib/clock";
-import { officePost } from "@/lib/office/route";
+import { officeGet, officePost } from "@/lib/office/route";
 import { agentLimit } from "@/lib/ratelimit";
 
 export const runtime = "nodejs";
@@ -20,5 +24,15 @@ export function POST(request: NextRequest) {
     if (!parsed.success) return NextResponse.json({ error: "Ask a question (3 to 500 characters)." }, { status: 400 });
     const clock = await loadClock(db);
     return askCopilot(db, { question: parsed.data.question, actor: { id: actor.id, role: actor.role }, now: clock.now });
+  });
+}
+
+export function GET(request: NextRequest) {
+  return officeGet(request, async (db, actor) => {
+    const models = modelsFromEnv();
+    let reason: "no_key" | "daily_cap" | null = null;
+    if (!models.language) reason = "no_key";
+    else if ((await aiRunsLast24h(db)) >= aiDailyCap()) reason = "daily_cap";
+    return { ai: reason === null, reason, tools: TOOLS_BY_ROLE[actor.role] };
   });
 }

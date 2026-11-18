@@ -279,6 +279,11 @@ Agents:
    steps (`isStepCount`). Answers cite records as links (`/office/tasks?task=|site=|assignee=`;
    the task table reads `site`/`assignee` params); every record a tool returned is also listed.
    Fallback: keyword routing to one tool (site synonyms: hospital -> Medical).
+   HR may use it (HR-scoped tools, HR example questions). `GET /api/office/copilot` returns
+   `{ ai, reason: no_key|daily_cap|null, tools }` so the drawer says up front when answers will be
+   fallbacks. `Drawer` (`components/office/ui.tsx`) renders through a portal on `<body>`: opened
+   from the sticky header, whose `backdrop-blur` makes it the containing block for `fixed`
+   children, it was clipped to the header strip.
 
 Measured locally (Opus 5.5, effort low; Neon is slow from this machine): dispatch 5-8 s,
 ~$0.016/run; report extraction ~4.7 s, ~$0.004 (end to end after a sync ~25 s locally); digest

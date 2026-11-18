@@ -90,7 +90,7 @@ export function OfficeShell({
             ))}
           </nav>
           <div className="ml-auto flex items-center gap-2 text-sm">
-            {actor && <CopilotButton />}
+            {actor && <CopilotButton role={actor.role} />}
             <span className="rounded border border-amber-400 bg-amber-50 px-1.5 py-0.5 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-100">
               Demo: no real login
             </span>

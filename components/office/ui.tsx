@@ -2,6 +2,7 @@
 import { X } from "lucide-react";
 import Link from "next/link";
 import { useEffect, type ReactNode, type SelectHTMLAttributes } from "react";
+import { createPortal } from "react-dom";
 import { BRANCH_TIMEZONE } from "@/lib/config";
 import { canManageRollouts, canManageTasks, canReviewTime, type Role } from "@/lib/domain";
 import { RECEIPT_STAGES, receiptStage, type ReceiptStage } from "@/lib/office/rules";
@@ -135,9 +136,11 @@ export function Drawer({ open, onClose, title, children }: { open: boolean; onCl
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
-  if (!open) return null;
-  return (
-    <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true">
+  if (!open || typeof document === "undefined") return null;
+  // Portal to <body>: a drawer opened from the sticky header (backdrop-blur creates a
+  // containing block for fixed children) would otherwise be clipped to the header strip.
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" data-testid="drawer">
       <button className="absolute inset-0 bg-black/30" aria-label="Close" onClick={onClose} />
       <div className="relative flex h-full w-full max-w-xl flex-col overflow-y-auto border-l bg-background p-4 shadow-xl">
         <div className="mb-3 flex items-start gap-2">
@@ -148,7 +151,8 @@ export function Drawer({ open, onClose, title, children }: { open: boolean; onCl
         </div>
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

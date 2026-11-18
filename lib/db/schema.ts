@@ -31,6 +31,8 @@ import {
   TASK_STATUSES,
   TRADES,
   WORKER_STATUSES,
+  type AgentName,
+  type AgentRunStatus,
   type EscalationRule,
   type MaterialStatus,
   type SmsStatus,
@@ -71,6 +73,23 @@ const seq = () =>
     .default(sql`nextval('sync_seq')`);
 
 const tsz = (name: string) => timestamp(name, { withTimezone: true, mode: "date" });
+
+/** What the field report agent stored on a note (see lib/agents/report.ts). */
+export type NoteReport = {
+  summary: string;
+  workDone: string[];
+  materialsUsed: { item: string; qty?: number | null }[];
+  materialsNeeded: { item: string; qty?: number | null }[];
+  blockers: string[];
+  safetyIssues: string[];
+  followUps: { title: string; assigneeRole: "coordinator" | "assignee"; dueInDays: number }[];
+  /** "ai" or "fallback" (rule-based, shown as "Fallback (AI unavailable)"). */
+  mode: "ai" | "fallback";
+  /** Tasks the agent created from this note, in creation order. */
+  createdTasks: { id: string; title: string; kind: string; priority: string }[];
+  /** Why there is no transcript (voice note, transcription unavailable). */
+  transcriptError?: string | null;
+};
 
 /** Per-field last-write-wins bookkeeping: the winning event for each field. */
 export type FieldStamp = { ts: string; ev: string };
@@ -271,8 +290,11 @@ export const fieldNotes = pgTable(
     mimeType: text("mime_type"),
     sizeBytes: integer("size_bytes"),
     durationSec: doublePrecision("duration_sec"),
+    /** Voice notes: speech-to-text by the field report agent (note.processed). */
     transcript: text("transcript"),
-    /** Set by the field report agent (Day 4) once it has read the note. */
+    /** Structured daily log from the field report agent (note.processed); null until processed. */
+    report: jsonb("report").$type<NoteReport>(),
+    /** Set by the field report agent (Day 5) once it has read the note. */
     processedAt: tsz("processed_at"),
     createdAt: tsz("created_at").notNull(),
     seq: seq(),
@@ -491,6 +513,74 @@ export const digests = pgTable(
   (t) => [index("digests_period_idx").on(t.branchId, t.periodStart)],
 );
 
+/**
+ * Day 5: every AI agent run (observability: /office/agents). One row per run,
+ * written before the model is called and finished afterwards. Office-only, so
+ * no seq. `subject_id` (note id, draft id) is unique per agent where set: that
+ * is how a note is claimed by exactly one report run.
+ */
+export const agentRuns = pgTable(
+  "agent_runs",
+  {
+    id: uuid("id").primaryKey(),
+    agent: text("agent").$type<AgentName>().notNull(),
+    /** What started it: sync, upload, poll, office, cron, test. */
+    trigger: text("trigger").notNull(),
+    /** The office person who asked (dispatch, digest button, copilot); null for automatic runs. */
+    actorId: uuid("actor_id").references(() => people.id),
+    subjectId: text("subject_id"),
+    inputSummary: text("input_summary").notNull(),
+    input: jsonb("input").$type<unknown>(),
+    output: jsonb("output").$type<unknown>(),
+    /** running -> ok (model answered) | fallback (rule-based output) | error (nothing produced). */
+    status: text("status").$type<AgentRunStatus>().notNull().default("running"),
+    model: text("model"),
+    tokensIn: integer("tokens_in"),
+    tokensOut: integer("tokens_out"),
+    latencyMs: integer("latency_ms"),
+    /** Rough USD estimate from the model's list price (lib/agents/pricing.ts). */
+    costUsd: doublePrecision("cost_usd"),
+    error: text("error"),
+    /** Validation notes: fields the model returned that were dropped, why the fallback ran. */
+    notes: jsonb("notes").$type<string[]>(),
+    createdAt: tsz("created_at").notNull(),
+    finishedAt: tsz("finished_at"),
+  },
+  (t) => [
+    index("agent_runs_created_idx").on(t.createdAt),
+    uniqueIndex("agent_runs_subject_idx").on(t.agent, t.subjectId).where(sql`${t.subjectId} is not null`),
+  ],
+);
+
+/**
+ * Day 5: dispatch agent drafts ("Dispatch drafts" inbox). Office-only state,
+ * like escalations: approving one creates the task through a normal
+ * task.created event (source dispatch_agent); the draft only records the decision.
+ */
+export const dispatchDrafts = pgTable(
+  "dispatch_drafts",
+  {
+    id: uuid("id").primaryKey(),
+    requestText: text("request_text").notNull(),
+    /** The site the coordinator picked on the form (optional). */
+    siteHintId: uuid("site_hint_id").references(() => sites.id),
+    status: text("status").$type<"pending" | "approved" | "rejected">().notNull().default("pending"),
+    /** Validated draft fields (see DispatchDraftFields in lib/agents/dispatch.ts). */
+    draft: jsonb("draft").$type<Record<string, unknown>>().notNull(),
+    mode: text("mode").$type<"ai" | "fallback">().notNull(),
+    runId: uuid("run_id"),
+    createdBy: uuid("created_by")
+      .notNull()
+      .references(() => people.id),
+    createdAt: tsz("created_at").notNull(),
+    decidedBy: uuid("decided_by").references(() => people.id),
+    decidedAt: tsz("decided_at"),
+    rejectReason: text("reject_reason"),
+    taskId: uuid("task_id"),
+  },
+  (t) => [index("dispatch_drafts_status_idx").on(t.status, t.createdAt)],
+);
+
 // ---------------------------------------------------------------------------
 // Row types
 // ---------------------------------------------------------------------------
@@ -509,3 +599,6 @@ export type Device = typeof devices.$inferSelect;
 export type Escalation = typeof escalations.$inferSelect;
 export type SmsMessage = typeof smsMessages.$inferSelect;
 export type PushSubscriptionRow = typeof pushSubscriptions.$inferSelect;
+export type AgentRun = typeof agentRuns.$inferSelect;
+export type DispatchDraftRow = typeof dispatchDrafts.$inferSelect;
+export type Digest = typeof digests.$inferSelect;

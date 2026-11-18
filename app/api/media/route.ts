@@ -2,10 +2,11 @@
 // (server upload: Vercel caps the body at 4.5 MB, our cap is 4 MB). The server
 // derives the pathname, stores the blob, then records `note.media_uploaded`
 // itself through processSync. The device never reports a URL or a path.
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { z } from "zod";
 import { MAX_MEDIA_BYTES, MAX_VOICE_SECONDS } from "@/lib/domain";
 import { mediaPathFor } from "@/lib/events";
+import { afterSyncAgents } from "@/lib/agents/hooks";
 import { withDb } from "@/lib/db/server";
 import { checkUploadAllowed, recordMediaUpload } from "@/lib/media/record";
 import { storeMedia } from "@/lib/media/store";
@@ -54,6 +55,8 @@ export async function POST(request: Request) {
       recordMediaUpload(db, { actorId, noteId, mediaId, blobPath, mimeType: mime, sizeBytes: file.size, durationSec }),
     );
     if (!recorded.ok) return fail(409, recorded.error);
+    // Voice notes: transcribe + report after the response (the phone never waits for AI).
+    after(() => afterSyncAgents(withDb, { trigger: "upload", noteId, throttleEscalations: false }));
     return NextResponse.json({ ok: true, mediaUrl: mediaUrlFor(noteId, blobPath) }, { headers: noStore });
   } catch (err) {
     if (err instanceof Error && err.message === "blob_not_configured") return fail(503, "blob_not_configured");

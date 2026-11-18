@@ -155,7 +155,7 @@ export async function seed(db: Db, opts: { now?: Date } = {}): Promise<SeedSumma
   // 1. Wipe. sync_seq is deliberately NOT restarted: cursors only move forward.
   await db.execute(sql`
     TRUNCATE events, field_notes, status_updates, time_entries, task_receipts, sms_messages, escalations,
-      push_subscriptions, digests, revocations, devices, tasks, sites, rollouts, people, branches
+      push_subscriptions, digests, agent_runs, dispatch_drafts, revocations, devices, tasks, sites, rollouts, people, branches
     RESTART IDENTITY CASCADE`);
   // Day 4: a reseed also resets the demo clock (escalations start from scratch).
   await db.execute(sql`UPDATE demo_settings SET clock_offset_ms = 0, last_escalation_run_at = NULL`);

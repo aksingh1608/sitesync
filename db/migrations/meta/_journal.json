@@ -43,6 +43,13 @@
       "when": 1794805660478,
       "tag": "0005_day4_escalations",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794979283706,
+      "tag": "0006_day5_agents",
+      "breakpoints": true
     }
   ]
 }

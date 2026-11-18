@@ -402,6 +402,7 @@ export function reduceNoteCreated(
     sizeBytes: null,
     durationSec: null,
     transcript: null,
+    report: null,
     processedAt: null,
     createdAt: new Date(ev.clientTs),
   });
@@ -429,6 +430,26 @@ export function reduceNoteMediaUploaded(
     mimeType: p.mimeType,
     sizeBytes: p.sizeBytes,
     durationSec: p.durationSec ?? null,
+  });
+}
+
+/**
+ * The field report agent read the note (server-only event, written as the
+ * note's author). The first processing wins; a repeat is a no-op, so a note is
+ * never processed twice even if two runs race.
+ */
+export function reduceNoteProcessed(
+  note: FieldNoteRow | undefined,
+  ev: EventOf<"note.processed">,
+): Result<FieldNoteRow> {
+  if (!note) return reject("note_not_found");
+  if (note.personId !== ev.actorId) return forbidden();
+  if (note.processedAt !== null) return ok(note, false);
+  return ok({
+    ...note,
+    transcript: ev.payload.transcript,
+    report: ev.payload.report,
+    processedAt: new Date(ev.clientTs),
   });
 }
 

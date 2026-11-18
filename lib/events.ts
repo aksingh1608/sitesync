@@ -121,6 +121,42 @@ export const NoteMediaUploadedPayload = z.strictObject({
   durationSec: z.number().nonnegative().max(60 * 60).optional(),
 });
 
+/** What the field report agent extracted from a note (stored on the note as `report`). */
+const shortText = z.string().trim().min(1).max(300);
+const material = z.strictObject({ item: shortText, qty: z.number().nonnegative().max(100_000).nullable().optional() });
+export const NoteReportSchema = z.strictObject({
+  summary: z.string().max(1000),
+  workDone: z.array(shortText).max(20),
+  materialsUsed: z.array(material).max(20),
+  materialsNeeded: z.array(material).max(20),
+  blockers: z.array(shortText).max(10),
+  safetyIssues: z.array(shortText).max(10),
+  followUps: z
+    .array(
+      z.strictObject({
+        title: shortText,
+        assigneeRole: z.enum(["coordinator", "assignee"]),
+        dueInDays: z.number().int().min(0).max(30),
+      }),
+    )
+    .max(10),
+  mode: z.enum(["ai", "fallback"]),
+  createdTasks: z
+    .array(z.strictObject({ id, title: z.string().max(200), kind: z.enum(TASK_KINDS), priority: z.enum(TASK_PRIORITIES) }))
+    .max(40),
+  transcriptError: z.string().max(300).nullable().optional(),
+});
+
+/**
+ * Written by the server (field report agent, acting as the note's author) after
+ * it read the note: transcript (voice) and structured log. First one wins.
+ */
+export const NoteProcessedPayload = z.strictObject({
+  noteId: id,
+  transcript: z.string().max(20_000).nullable(),
+  report: NoteReportSchema,
+});
+
 /** Office: progress a material request (approved -> ordered -> delivered, forward only). */
 export const MaterialStatusChangedPayload = z.strictObject({
   taskId: id,
@@ -161,6 +197,7 @@ export const EventSchema = z.discriminatedUnion("type", [
   ev("status.set", StatusSetPayload),
   ev("note.created", NoteCreatedPayload),
   ev("note.media_uploaded", NoteMediaUploadedPayload),
+  ev("note.processed", NoteProcessedPayload),
   ev("material.status_changed", MaterialStatusChangedPayload),
   ev("site.stage_changed", SiteStageChangedPayload),
   ev("time.approved", TimeApprovedPayload),
@@ -179,7 +216,7 @@ export const EVENT_TYPES = EventSchema.options.map((o) => o.shape.type.value) as
  * Event types only the server may create (via processSync's `trusted` option).
  * /api/sync rejects them from devices with "forbidden".
  */
-export const SERVER_ONLY_EVENT_TYPES: readonly EventType[] = ["note.media_uploaded"];
+export const SERVER_ONLY_EVENT_TYPES: readonly EventType[] = ["note.media_uploaded", "note.processed"];
 
 /** Receipt event types, in chain order. */
 export const RECEIPT_EVENT_TYPES = ["task.delivered", "task.seen", "task.acknowledged"] as const;

@@ -119,3 +119,9 @@ export const TASK_LWW_FIELDS = [
   "dueAt",
 ] as const;
 export type TaskLwwField = (typeof TASK_LWW_FIELDS)[number];
+
+/** Day 5 AI agents. They suggest; rules (Day 4) do anything that must be reliable. */
+export const AGENT_NAMES = ["dispatch_agent", "report_agent", "digest_agent", "ops_copilot"] as const;
+export type AgentName = (typeof AGENT_NAMES)[number];
+export const AGENT_RUN_STATUSES = ["running", "ok", "fallback", "error"] as const;
+export type AgentRunStatus = (typeof AGENT_RUN_STATUSES)[number];

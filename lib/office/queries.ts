@@ -138,7 +138,7 @@ export async function loadTaskDetail(db: Db, taskId: string) {
     .where(
       or(
         sql`${events.payload}->>'taskId' = ${taskId}`,
-        noteIds.length ? and(eq(events.type, "note.media_uploaded"), inArray(sql`${events.payload}->>'noteId'`, noteIds)) : undefined,
+        noteIds.length ? and(inArray(events.type, ["note.media_uploaded", "note.processed"]), inArray(sql`${events.payload}->>'noteId'`, noteIds)) : undefined,
       ),
     )
     .orderBy(asc(events.serverSeq));

@@ -1,6 +1,6 @@
 import { after } from "next/server";
 import { withDb } from "@/lib/db/server";
-import { runEscalationsSafe } from "@/lib/escalation/run";
+import { afterSyncAgents } from "@/lib/agents/hooks";
 import { handleSync } from "@/lib/sync/http";
 import { processSync } from "@/lib/sync/service";
 
@@ -22,8 +22,9 @@ export async function POST(request: Request) {
     if (out.ok) accepted = out.response.accepted.length;
     return out;
   });
-  // Escalation rules after the response (never slows or fails the sync). A sync
-  // that changed something runs them right away; an idle one is throttled.
-  after(() => runEscalationsSafe(withDb, { trigger: "sync", throttle: accepted === 0 }));
+  // After the response (never slows or fails the sync): the field report agent
+  // for notes that just arrived, then the escalation rules. A sync that changed
+  // something runs them right away; an idle one is throttled.
+  after(() => afterSyncAgents(withDb, { trigger: "sync", throttleEscalations: accepted === 0 }));
   return res;
 }

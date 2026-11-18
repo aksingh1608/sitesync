@@ -18,10 +18,13 @@
     "e2e:office": "node scripts/e2e-office.mjs"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "4.0.96",
+    "@ai-sdk/openai": "4.0.108",
     "@base-ui/react": "^1.9.0",
     "@neondatabase/serverless": "1.2.1",
     "@serwist/turbopack": "9.5.13",
     "@vercel/blob": "2.8.2",
+    "ai": "7.0.162",
     "class-variance-authority": "^0.7.1",
     "cn": "^0.5.2",
     "dexie": "4.4.7",

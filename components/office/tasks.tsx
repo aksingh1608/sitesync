@@ -319,6 +319,7 @@ const EVENT_LABEL: Record<string, string> = {
   "task.acknowledged": "Acknowledged (Got it)",
   "note.created": "Note added",
   "note.media_uploaded": "Media uploaded",
+  "note.processed": "Note read by the report agent",
   "material.status_changed": "Material request",
 };
 

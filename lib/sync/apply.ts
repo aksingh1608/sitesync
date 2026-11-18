@@ -11,6 +11,7 @@ import {
   reduceTimeReviewed,
   reduceNoteCreated,
   reduceNoteMediaUploaded,
+  reduceNoteProcessed,
   reduceReceipt,
   reduceStatusSet,
   reduceTaskCreated,
@@ -183,6 +184,13 @@ export async function applyEvent(store: SyncStore, ev: SyncEvent, now: Date): Pr
 
     case "note.media_uploaded": {
       const r = reduceNoteMediaUploaded(await store.getNote(ev.payload.noteId), ev);
+      if (!r.ok) return r;
+      if (r.changed) await store.putNote(r.value);
+      return { ok: true, changed: r.changed };
+    }
+
+    case "note.processed": {
+      const r = reduceNoteProcessed(await store.getNote(ev.payload.noteId), ev);
       if (!r.ok) return r;
       if (r.changed) await store.putNote(r.value);
       return { ok: true, changed: r.changed };

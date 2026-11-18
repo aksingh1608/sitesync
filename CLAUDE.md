@@ -284,6 +284,49 @@ Measured locally (Opus 5.5, effort low; Neon is slow from this machine): dispatc
 ~$0.016/run; report extraction ~4.7 s, ~$0.004 (end to end after a sync ~25 s locally); digest
 ~7 s, ~$0.017; copilot 8-16 s (2-3 tool steps), ~$0.04. Fallbacks: < 3 s, $0.
 
+## Day 6: hardening and demo kit
+
+- **Rate limits** (`lib/ratelimit.ts`, table `rate_limits`, fixed windows shared by all
+  instances): `/api/sync` per device 120/min + per IP 600/min (429 `{retryable: true}` +
+  Retry-After; the client keeps its outbox and backs off), `/api/media` per actor 20/min + per IP
+  60/min, agent routes (dispatch POST, copilot, digest POST) per office person 12/min + per IP
+  30/min. Old windows are pruned randomly (2%).
+- **Daily AI cap** (`lib/agents/budget.ts`): `AI_DAILY_RUN_CAP` (default 300) model runs per 24 h
+  (counted from `agent_runs.model`); over it agents use their fallback. Agents call
+  `budgetedModels(db)` unless a test passes `deps.models`.
+- **Error screens**: `app/error.tsx`, `app/field/error.tsx` (inside FieldChrome: the sync bar
+  stays), `app/office/error.tsx`, `app/global-error.tsx`, `app/not-found.tsx`. Next 16 passes
+  `retry` (prefer it over `reset`).
+- **Demo mode** (`NEXT_PUBLIC_DEMO_MODE=1`, build time, `DEMO_MODE` in `lib/config.ts`): `/debug`
+  for everyone (else managers only, `canSeeDebug`) and "Reset this device" on field Me (warns
+  about unsynced changes, then `resetLocalData` + full reload).
+- **`/office/demo`** (managers): health strip (`lib/demo/health.ts`: DB ping, Anthropic/OpenAI
+  key probes via the free models-list endpoints, cached 5 min; push, SMS mode, AI budget, version
+  + commit + build time from next.config `env` SITESYNC_COMMIT/SITESYNC_BUILT_AT, read as literal
+  `process.env.X`), **Reset demo** (`POST /api/office/demo/reset` -> `reseedWithRetry(openDb)`:
+  the seed truncates everything incl. escalations, SMS, agent runs, drafts, digests and resets the
+  demo clock; ~6-10 s; migrations are traced into that function via `outputFileTracingIncludes`,
+  PGlite is a runtime dependency), and the demo steps. The rules clock is walked in **three
+  "+30 min" clicks** (push, SMS, coordinator alert): "+30 min" then "+1 hour" lands on +90 where
+  the SMS level is superseded (only the highest due step is sent).
+- **Voice notes are not transcribed** in this build (the user chose no OpenAI key). The field
+  Notes screen tells workers to dictate into a text note with the keyboard mic; the demo script
+  does that. A voice note's report says so instead of naming a missing key.
+- **Icons/wordmark**: `scripts/gen-icons.ts` draws a two-arrow sync ring around a small bolt;
+  `components/logo.tsx` is the same mark in SVG (office sidebar, start page).
+- **Performance** (local build, Chromium, slow 4G + 4x CPU): `/field` cold FCP 0.8 s, load 2.0 s,
+  ~307 KB transferred (React DOM 73 KB gz, Dexie + Zod + sync 69 KB gz, Next 46 KB gz); with the
+  service worker FCP 0.2 s, 0 KB. recharts loads only on the Team page (`next/dynamic`).
+- **Secrets audit**: no secret env value appears in `.next/static`, `public` or the service worker
+  (checked by scanning the build for every non-`NEXT_PUBLIC_` value in `.env.local`).
+- **Vercel limits checked (2026-11-18, Hobby)**: functions 300 s default and max (ours <= 120 s),
+  2 GB memory, 4.5 MB request body (uploads capped at 4 MB), cron once a day with +-59 min
+  precision (ours: `0 13 * * *`), 100 crons per project.
+- **Databases**: `.env.local` points at a separate dev database (not production). Production and
+  Preview on Vercel shared the production database; the plan is to point Preview at the dev one.
+- Docs: `docs/demo-script.md`, `docs/interview-qa.md`, `docs/backup-plan.md`,
+  `docs/architecture.md`, `docs/device-test.md` (checklist + results), `docs/prompts/` (day plans).
+
 ## Media (private Vercel Blob store)
 
 Voice (MediaRecorder; mime picked with `isTypeSupported`, iOS gives audio/mp4; 2 min cap) and
@@ -356,7 +399,9 @@ app/
   api/push/subscribe/    POST / DELETE push subscriptions
   api/office/            + demo-clock, escalations/handle, sms (log, demo recipient, test SMS)
   api/office/            + dispatch (+decide), digest (+send), copilot, agents (Day 5)
-  office/                + dispatch, digest, agents pages (Day 5)
+  office/                + dispatch, digest, agents pages (Day 5), demo (Day 6, managers)
+  api/office/demo/       GET health (+ samples), reset/ POST Reset demo (Day 6)
+  error.tsx, global-error.tsx, not-found.tsx, field/error.tsx, office/error.tsx
   t/[code]/              short task link for SMS
   serwist/[path]/route.ts, sw.ts, manifest.ts, layout.tsx
 components/              sync-manager (triggers + upload hook), update-banner, sync-status, use-local,
@@ -386,11 +431,14 @@ lib/
   sms/                   provider (interface, mock, routing), twilio (REST), send (log rows)
   tasks/grouping.ts      Overdue / Today / Next 7 days / Later / Follow-ups (rolling, branch tz)
   agents/                ai (models, fallback), runs (agent_runs), pricing, ids, hooks (after-sync),
-                         dispatch, report, digest, copilot
+                         budget (daily AI cap), dispatch, report, digest, copilot
+  ratelimit.ts           shared fixed-window rate limits (Day 6)
+  demo/health.ts         demo control health strip
 lib/office/              auth (office actor), queries (server reads + SQL stats), rules, derive,
                          timesheets (rows + CSV), route (GET wrapper)
 components/office/       data (polling, writes via /api/sync), shell, ui, tasks, agents (copilot, badges)
 components/agent-report.tsx  report agent output (field Notes + office drawer)
+components/logo.tsx, error-screen.tsx, office/team-charts.tsx (lazy recharts)
 db/  migrations/ (drizzle-kit), migrate.ts, seed.ts, seed-data.ts, seed-fast.ts, connect.ts
 tests/  Vitest: sync, day2 (authz, revocations, paging, media; PGlite), reducers, client,
         client-day2, media (fake-indexeddb + PGlite), grouping, seed, field, day3 (office events,
@@ -398,7 +446,8 @@ tests/  Vitest: sync, day2 (authz, revocations, paging, media; PGlite), reducers
         escalation-run (PGlite: demo flow, concurrency, push cleanup, SMS routing, throttle),
         agents-report, agents-dispatch, agents-digest-copilot (mocked models via ai/test;
         agent-mocks.ts). Tests never call a real AI API.
-scripts/gen-icons.ts     placeholder PWA icons (no deps)
+scripts/gen-icons.ts     PWA icons: sync ring + bolt (no deps); e2e-agents.ts, demo-dryrun.ts
+docs/                    demo-script, interview-qa, backup-plan, architecture, device-test, prompts/
 ```
 
 ## Commands
@@ -412,6 +461,8 @@ pnpm db:studio
 pnpm icons         # regenerate placeholder icons
 CODE=… BASE=http://localhost:3100 pnpm e2e:office   # headless Playwright: /office per role +
                    # two-context receipt test; screenshots in /tmp/sitesync-office (creates 1 task)
+BASE=http://localhost:3100 pnpm demo:dryrun [--runs 2] [--hourly]   # demo script, server side;
+                   # WIPES the target DB (Reset demo), real AI calls (~$0.10 a run)
 BASE=http://localhost:3100 pnpm e2e:agents [--fallback]   # Day 5 definition of done against a
                    # running server (REAL model calls, ~$0.25 a run; writes demo data). --fallback: start
                    # the server with ANTHROPIC_API_KEY= OPENAI_API_KEY= and assert every agent falls back
@@ -424,7 +475,8 @@ Day 4: `NEXT_PUBLIC_VAPID_PUBLIC_KEY` (build-time, starts with "B", 87 chars), `
 `VAPID_SUBJECT`, `CRON_SECRET`, `SMS_PROVIDER` (mock|twilio), `TWILIO_ACCOUNT_SID`,
 `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`, `SMS_DEMO_TO_NUMBER`; Day 5: `ANTHROPIC_API_KEY`,
 `ANTHROPIC_MODEL`, `ANTHROPIC_EFFORT`, `OPENAI_API_KEY`, `OPENAI_TRANSCRIPTION_MODEL` (all optional:
-missing keys mean rule-based fallbacks).
+missing keys mean rule-based fallbacks); Day 6: `NEXT_PUBLIC_DEMO_MODE` (build time),
+`AI_DAILY_RUN_CAP`.
 On Vercel, `vercel env ls` shows a "Config" (non-sensitive) value as an encrypted `eyJ2…`
 envelope (base64 of `{"v`), not the value itself.
 
@@ -454,9 +506,16 @@ envelope (base64 of `{"v`), not the value itself.
 5. **Day 5 (done): AI agents.** Dispatch agent (draft -> human approval), field report agent
    (voice/text note -> transcript -> structured log, follow-ups, material requests, urgent safety
    task), daily digest (checked numbers), ops copilot (read-only tools), agent activity page.
-6. **Day 6: polish + demo.** Deploy to Vercel, demo script, airplane-mode walkthrough, hardening.
+6. **Day 6: polish + demo.** Hardening (rate limits, AI cap, error screens, debug gate), demo
+   control panel, icon/wordmark, docs, dry run x2 (done); production deploy and the real-device
+   pass need the user (approval per Vercel/Neon command; checklist in `docs/device-test.md`).
 
-## Known gaps (after Day 5)
+## Known gaps (after Day 6)
+
+- Rate limits are per IP / device / person fixed windows; the access code is still shared and
+  there is no lockout after wrong codes beyond a 400 ms delay.
+- Lighthouse was not run by the assistant (a downloaded tool would have received the access
+  token); it is on the device checklist (L4) to run in Chrome DevTools.
 
 - Voice transcription needs `OPENAI_API_KEY`; without it voice notes are logged with no
   transcript and the report agent creates nothing from them (text notes still work by rules).

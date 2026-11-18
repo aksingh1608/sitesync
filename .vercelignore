@@ -1,0 +1,6 @@
+# Never upload local secrets or local media with `vercel deploy`.
+.env*
+!.env.example
+.data
+.next
+node_modules

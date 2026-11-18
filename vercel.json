@@ -1,4 +1,10 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "crons": [{ "path": "/api/escalations/run", "schedule": "0 13 * * *" }]
+  "buildCommand": "tsx db/migrate-on-deploy.ts && next build",
+  "crons": [
+    {
+      "path": "/api/escalations/run",
+      "schedule": "0 13 * * *"
+    }
+  ]
 }

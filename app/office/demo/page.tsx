@@ -96,11 +96,12 @@ export default function DemoPage() {
             <Step n={2} title="Open the dispatch draft and approve it">
               <Link href="/office/dispatch" className="h-8 rounded-md border px-3 leading-8 hover:bg-muted">Open dispatch drafts</Link>
             </Step>
-            <Step n={3} title="Fast-forward 30 min (first reminder)">
+            <Step n={3} title="Fast-forward the rules clock: click +30 min three times">
               <Btn onClick={() => clock("+30m")} busy={busy === "+30m"} testId="demo-ff30">+30 min</Btn>
+              <span className="text-xs text-muted-foreground">1st: reminder push · 2nd: SMS · 3rd: coordinator alert</span>
             </Step>
-            <Step n={4} title="Fast-forward 1 hour (SMS, then coordinator alert)">
-              <Btn onClick={() => clock("+1h")} busy={busy === "+1h"} testId="demo-ff60">+1 hour</Btn>
+            <Step n={4} title="Or jump (skips the SMS step: only the highest due step is sent)">
+              <Btn onClick={() => clock("+1h")} busy={busy === "+1h"} testId="demo-ff60" variant="ghost">+1 hour</Btn>
               <Btn onClick={() => clock("reset")} busy={busy === "reset"} variant="ghost">Reset clock</Btn>
             </Step>
             <Step n={5} title="Generate today's digest">

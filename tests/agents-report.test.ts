@@ -202,7 +202,7 @@ describe("runReportAgent", () => {
     expect((await runReportAgent(db, n2, { trigger: "test", deps: { models: models(mockLanguage(extraction)), readAudio, now } })).status).toBe("fallback");
     const [v2] = await db.select().from(fieldNotes).where(eq(fieldNotes.id, n2));
     expect(v2.transcript).toBeNull();
-    expect(v2.report?.transcriptError).toContain("OPENAI_API_KEY");
+    expect(v2.report?.transcriptError).toMatch(/not transcribed/);
     expect(v2.report?.createdTasks).toEqual([]);
   });
 

@@ -295,8 +295,11 @@ export async function runReportAgent(db: Db, noteId: string, opts: { trigger: st
       transcript = t.value;
       transcribeMs = t.latencyMs;
       if (t.mode === "fallback") {
-        transcriptError = `Transcription unavailable (${t.error})`;
-        runNotes.push(transcriptError);
+        // Shown to the worker on the note: say what to do instead, not which key is missing.
+        transcriptError = models.transcription
+          ? "This voice note could not be transcribed. Add a typed or dictated text note for the report."
+          : "Voice notes are not transcribed in this demo. For a report, type or dictate a text note (keyboard mic).";
+        runNotes.push(`transcription unavailable: ${t.error}`);
       } else {
         transcribeCost = transcriptionCostUsd(models.transcriptionId, note.durationSec ?? null);
       }

@@ -118,6 +118,12 @@ function Notes() {
         <Field label={kind === "text" ? "Note" : "Caption (optional)"}>
           <textarea className={inputClass} rows={kind === "text" ? 4 : 2} value={text} onChange={(e) => setText(e.target.value)} data-testid="note-text" />
         </Field>
+        {kind === "text" && (
+          <p className="text-base text-slate-700">
+            Tip: tap the microphone on your keyboard to dictate. A note of 20 words or more becomes a daily log (work done,
+            materials needed, safety issues) once it syncs.
+          </p>
+        )}
         <BigButton disabled={!ready} onClick={save} data-testid="save-note" aria-describedby="save-why">
           Save note
         </BigButton>
@@ -255,7 +261,7 @@ function NoteItem({ note, media, siteName, pending }: { note: CachedFieldNote; m
         processedAt={note.processedAt}
         taskHref={(id) => `/field/task?id=${id}`}
         className="text-base"
-        pendingLabel={note.kind === "voice" && note.mediaUrl ? "The report agent will read this note shortly." : null}
+        pendingLabel={null}
       />
     </li>
   );

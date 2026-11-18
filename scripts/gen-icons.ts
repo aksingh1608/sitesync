@@ -1,14 +1,18 @@
-// Generates simple placeholder PWA icons (a lightning bolt on a dark tile)
-// with no image dependencies: rasterize a polygon, encode PNG with zlib.
+// Generates the PWA icons with no image dependencies (rasterize shapes with
+// supersampling, encode PNG with zlib). The mark: a two-arrow sync ring (the
+// app's promise: nothing is lost, everything syncs) around a small bolt
+// (electrical work), on a slate tile. Neutral on purpose: no real brand.
+// The same geometry is drawn as SVG in components/logo.tsx.
 // Run: pnpm icons
 import { mkdirSync, writeFileSync } from "node:fs";
 import { deflateSync } from "node:zlib";
 
 const BG = [15, 23, 42]; // slate-900
-const FG = [250, 204, 21]; // amber-400
+const RING = [226, 232, 240]; // slate-200
+const BOLT_C = [251, 191, 36]; // amber-400
 
-// Bolt polygon in a 0..1 unit square.
-const BOLT: [number, number][] = [
+// Bolt polygon in a 0..1 unit square, drawn small in the middle of the ring.
+const BOLT_UNIT: [number, number][] = [
   [0.58, 0.08],
   [0.24, 0.56],
   [0.47, 0.56],
@@ -17,6 +21,47 @@ const BOLT: [number, number][] = [
   [0.53, 0.42],
   [0.62, 0.08],
 ];
+const BOLT: [number, number][] = BOLT_UNIT.map(([x, y]) => [0.5 + (x - 0.5) * 0.36, 0.5 + (y - 0.5) * 0.36]);
+
+// Sync ring: two arcs (gaps at the top-right and bottom-left), each ending in an arrowhead.
+export const RING_R = 0.3;
+export const RING_W = 0.065;
+/** Arcs in degrees (0 = right, clockwise, screen coordinates). */
+export const ARCS: [number, number][] = [
+  [-150, -5],
+  [30, 175],
+];
+const rad = (d: number) => (d * Math.PI) / 180;
+/** Arrowhead at the end of an arc, pointing clockwise along the ring. */
+export function arrowHead(endDeg: number): [number, number][] {
+  const a = rad(endDeg);
+  const cx = 0.5 + RING_R * Math.cos(a);
+  const cy = 0.5 + RING_R * Math.sin(a);
+  const tx = -Math.sin(a); // clockwise tangent (screen coords)
+  const ty = Math.cos(a);
+  const nx = Math.cos(a); // outward normal
+  const ny = Math.sin(a);
+  const half = RING_W * 1.25;
+  const len = RING_W * 1.9;
+  return [
+    [cx + nx * half, cy + ny * half],
+    [cx + tx * len, cy + ty * len],
+    [cx - nx * half, cy - ny * half],
+  ];
+}
+const HEADS = ARCS.map(([, end]) => arrowHead(end));
+
+function onRing(u: number, v: number): boolean {
+  const dx = u - 0.5;
+  const dy = v - 0.5;
+  const r = Math.hypot(dx, dy);
+  if (Math.abs(r - RING_R) > RING_W / 2) return false;
+  const deg = (Math.atan2(dy, dx) * 180) / Math.PI; // -180..180
+  return ARCS.some(([s, e]) => {
+    for (const d of [deg, deg + 360, deg - 360]) if (d >= s && d <= e) return true;
+    return false;
+  });
+}
 
 function inside(x: number, y: number, poly: [number, number][]) {
   let c = false;
@@ -36,7 +81,8 @@ function render(size: number, scale: number, rounded: boolean): Buffer {
   for (let y = 0; y < size; y++) {
     raw[y * (size * 4 + 1)] = 0; // filter: none
     for (let x = 0; x < size; x++) {
-      let fg = 0;
+      let ring = 0;
+      let bolt = 0;
       let cover = 0;
       for (let sy = 0; sy < SS; sy++) {
         for (let sx = 0; sx < SS; sx++) {
@@ -49,13 +95,15 @@ function render(size: number, scale: number, rounded: boolean): Buffer {
           cover++;
           const u = (px / size - 0.5) / scale + 0.5;
           const v = (py / size - 0.5) / scale + 0.5;
-          if (inside(u, v, BOLT)) fg++;
+          if (inside(u, v, BOLT)) bolt++;
+          else if (onRing(u, v) || HEADS.some((h) => inside(u, v, h))) ring++;
         }
       }
       const n = SS * SS;
-      const t = cover ? fg / cover : 0;
+      const tr = cover ? ring / cover : 0;
+      const tb = cover ? bolt / cover : 0;
       const o = y * (size * 4 + 1) + 1 + x * 4;
-      for (let k = 0; k < 3; k++) raw[o + k] = Math.round(BG[k] * (1 - t) + FG[k] * t);
+      for (let k = 0; k < 3; k++) raw[o + k] = Math.round(BG[k] * (1 - tr - tb) + RING[k] * tr + BOLT_C[k] * tb);
       raw[o + 3] = Math.round((cover / n) * 255);
     }
   }
@@ -94,6 +142,9 @@ function png(w: number, h: number, raw: Buffer) {
   ]);
 }
 
+if (process.argv[1]?.endsWith("gen-icons.ts")) main();
+
+function main() {
 mkdirSync("public/icons", { recursive: true });
 const out: [string, Buffer][] = [
   ["public/icons/icon-192.png", render(192, 1, true)],
@@ -107,4 +158,5 @@ const out: [string, Buffer][] = [
 for (const [path, buf] of out) {
   writeFileSync(path, buf);
   console.log(`wrote ${path} (${buf.length} bytes)`);
+}
 }

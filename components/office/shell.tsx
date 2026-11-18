@@ -8,6 +8,7 @@ import type { Role } from "@/lib/domain";
 import type { OfficeActor } from "@/lib/office/auth";
 import { cn } from "@/lib/utils";
 import { SnapshotProvider } from "./data";
+import { Wordmark } from "@/components/logo";
 import { CopilotButton } from "./agents";
 import { DemoClockBar } from "./escalations";
 import { capabilities } from "./ui";
@@ -52,8 +53,7 @@ export function OfficeShell({
     <div className="flex min-h-screen w-full">
       <aside className="sticky top-0 hidden h-screen w-56 shrink-0 flex-col border-r bg-sidebar p-3 text-sidebar-foreground md:flex">
         <div className="px-2 pb-4">
-          <div className="text-base font-semibold">{APP_NAME} Office</div>
-          <div className="text-xs text-muted-foreground">{COMPANY_NAME} · fictional</div>
+          <Wordmark sub={`Office · ${COMPANY_NAME} (fictional)`} />
         </div>
         <nav className="flex flex-col gap-0.5" aria-label="Office">
           {actor &&

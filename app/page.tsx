@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useMeta } from "@/components/use-local";
+import { LogoMark } from "@/components/logo";
 import { APP_NAME, COMPANY_NAME } from "@/lib/config";
 import { setMeta, type DirectoryEntry } from "@/lib/db/local";
 import { ROLES, isOfficeRole, type Role } from "@/lib/domain";
@@ -55,7 +56,10 @@ export default function RolePicker() {
   return (
     <main className="mx-auto w-full max-w-xl p-4 space-y-4">
       <header className="space-y-1">
-        <h1 className="text-2xl font-semibold">{APP_NAME}</h1>
+        <h1 className="flex items-center gap-2 text-2xl font-semibold">
+          <LogoMark className="size-9" />
+          {APP_NAME}
+        </h1>
         <p className="text-sm text-muted-foreground">{COMPANY_NAME} · fictional demo data</p>
       </header>
 

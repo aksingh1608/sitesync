@@ -26,7 +26,7 @@ export const OFFLINE_ROUTES = [
 ] as const;
 
 /** Reported by devices to /api/sync (shown in the office as the app version per device). */
-export const APP_VERSION = "0.4.0";
+export const APP_VERSION = "0.6.0";
 /** Office cookie (demo mode): who is using /office in this browser. Separate from the field actor. */
 export const OFFICE_ACTOR_COOKIE = "sitesync_office_actor";
 /** Tasks sent longer ago than this without "Got it" are highlighted (Day 4 escalates them). */

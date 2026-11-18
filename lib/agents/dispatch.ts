@@ -10,7 +10,7 @@ import { generateText, Output } from "ai";
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { BRANCH_TIMEZONE } from "../config";
-import { dispatchDrafts, people, rollouts, sites, tasks, timeEntries } from "../db/schema";
+import { agentRuns, dispatchDrafts, people, rollouts, sites, tasks, timeEntries } from "../db/schema";
 import { isFieldRole, TASK_KINDS, TASK_PRIORITIES, TRADES, type Role, type TaskKind, type TaskPriority, type Trade } from "../domain";
 import { suggestAssignees } from "../office/rules";
 import type { Db } from "../sync/store-drizzle";
@@ -470,6 +470,14 @@ export async function rejectDraft(db: Db, input: { draftId: string; actorId: str
   return { ok: true, taskId: null };
 }
 
+/** Drafts, newest first, with their run's validation notes and latency (for the inbox). */
 export async function listDrafts(db: Db, limit = 40) {
-  return db.select().from(dispatchDrafts).orderBy(desc(dispatchDrafts.createdAt)).limit(limit);
+  const rows = await db
+    .select({ d: dispatchDrafts, notes: agentRuns.notes, latencyMs: agentRuns.latencyMs, error: agentRuns.error, model: agentRuns.model })
+    .from(dispatchDrafts)
+    .leftJoin(agentRuns, eq(agentRuns.id, dispatchDrafts.runId))
+    .orderBy(desc(dispatchDrafts.createdAt))
+    .limit(limit);
+  return rows.map((r) => ({ ...r.d, draft: r.d.draft as unknown as DispatchDraftFields, run: { notes: r.notes ?? [], latencyMs: r.latencyMs, error: r.error, model: r.model } }));
 }
+export type DraftListItem = Awaited<ReturnType<typeof listDrafts>>[number];

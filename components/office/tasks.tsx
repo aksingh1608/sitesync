@@ -10,6 +10,7 @@ import { uuidv4 } from "@/lib/uuid";
 import { cn } from "@/lib/utils";
 import { useSnapshot, usePolling, type Json, type Snap } from "./data";
 import { EscalationTimeline } from "./escalations";
+import { AgentReport } from "@/components/agent-report";
 import {
   capabilities,
   Drawer,
@@ -40,9 +41,20 @@ export const VIEW_LABEL: Record<TaskView, string> = {
 type Filters = { site: string; assignee: string; status: string; priority: string; kind: string; stage: string };
 const NO_FILTERS: Filters = { site: "", assignee: "", status: "active", priority: "", kind: "", stage: "" };
 
-export function TaskTable({ view, onClearView, initialTaskId = null }: { view: TaskView | null; onClearView: () => void; initialTaskId?: string | null }) {
+export function TaskTable({
+  view,
+  onClearView,
+  initialTaskId = null,
+  initialFilters,
+}: {
+  view: TaskView | null;
+  onClearView: () => void;
+  initialTaskId?: string | null;
+  /** From ?site= / ?assignee= (copilot links). */
+  initialFilters?: Partial<Filters>;
+}) {
   const { data, send } = useSnapshot();
-  const [f, setF] = useState<Filters>(NO_FILTERS);
+  const [f, setF] = useState<Filters>(() => (initialFilters ? { ...NO_FILTERS, ...initialFilters } : NO_FILTERS));
   const [openId, setOpenId] = useState<string | null>(initialTaskId);
   const [creating, setCreating] = useState(false);
   const d = useMemo(() => (data ? derive(data) : null), [data]);
@@ -368,6 +380,8 @@ function TaskPanel({ taskId, d, snap }: { taskId: string; d: D; snap: Snap }) {
         <Pill tone={priorityTone(t.priority)}>{t.priority}</Pill>
         <Pill>{KIND_LABEL[t.kind]}</Pill>
         {t.kind === "material_request" && <Pill tone="blue">{MATERIAL_LABEL[t.materialStatus ?? "requested"]}</Pill>}
+        {t.source === "report_agent" && <Pill tone="blue">Created by report agent</Pill>}
+        {t.source === "dispatch_agent" && <Pill tone="blue">Drafted by dispatch agent, approved by a person</Pill>}
       </div>
       <dl className="grid grid-cols-[7rem_1fr] gap-y-1">
         <dt className="text-muted-foreground">Site</dt><dd>{d.site.get(t.siteId)?.name}</dd>
@@ -382,6 +396,17 @@ function TaskPanel({ taskId, d, snap }: { taskId: string; d: D; snap: Snap }) {
         {data.parent && (<><dt className="text-muted-foreground">Follow-up of</dt><dd>{data.parent.title}</dd></>)}
       </dl>
       {t.description && <p className="whitespace-pre-wrap rounded-md bg-muted/50 p-2">{t.description}</p>}
+      {data.sourceNote && (
+        <section className="space-y-1" data-testid="source-note">
+          <h3 className="font-semibold">From this field note</h3>
+          <div className="rounded-md border p-2">
+            <div className="text-xs text-muted-foreground">{d.person.get(data.sourceNote.personId)?.name} · {fmtDateTime(data.sourceNote.createdAt)} · {data.sourceNote.kind}</div>
+            {data.sourceNote.text && <p className="whitespace-pre-wrap">{data.sourceNote.text}</p>}
+            {data.sourceNote.mediaUrl && data.sourceNote.kind === "voice" && <audio controls preload="none" src={data.sourceNote.mediaUrl} className="mt-1 w-full" />}
+            <AgentReport transcript={data.sourceNote.transcript} report={data.sourceNote.report} processedAt={data.sourceNote.processedAt} taskHref={(id) => `/office/tasks?task=${id}`} className="mt-1" />
+          </div>
+        </section>
+      )}
       {older.length > 0 && (
         <p className="text-xs text-muted-foreground">Earlier assignees: {older.map((r) => `${d.person.get(r.personId)?.name} (${r.acknowledgedAt ? "acknowledged" : r.seenAt ? "seen" : r.deliveredAt ? "delivered" : "sent"})`).join(", ")}</p>
       )}
@@ -428,6 +453,7 @@ function TaskPanel({ taskId, d, snap }: { taskId: string; d: D; snap: Snap }) {
               </a>
             )}
             {!n.mediaUrl && n.mediaId && <p className="text-xs text-amber-800 dark:text-amber-300">Media still uploading from the phone.</p>}
+            <AgentReport transcript={n.transcript} report={n.report} processedAt={n.processedAt} taskHref={(id) => `/office/tasks?task=${id}`} className="mt-1" />
           </div>
         ))}
       </section>

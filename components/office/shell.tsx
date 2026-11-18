@@ -1,5 +1,5 @@
 "use client";
-import { BarChart3, CalendarClock, ClipboardList, LayoutGrid, MessageSquare, Package, Store } from "lucide-react";
+import { Activity, BarChart3, CalendarClock, ClipboardList, Inbox, LayoutGrid, MessageSquare, Newspaper, Package, Store } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import type { ReactNode } from "react";
@@ -8,6 +8,7 @@ import type { Role } from "@/lib/domain";
 import type { OfficeActor } from "@/lib/office/auth";
 import { cn } from "@/lib/utils";
 import { SnapshotProvider } from "./data";
+import { CopilotButton } from "./agents";
 import { DemoClockBar } from "./escalations";
 import { capabilities } from "./ui";
 
@@ -19,6 +20,9 @@ const NAV = [
   { href: "/office/timesheets", label: "Timesheets", icon: CalendarClock, show: () => true },
   { href: "/office/sms", label: "SMS log", icon: MessageSquare, show: (r: Role) => r !== "hr" },
   { href: "/office/team", label: "Team", icon: BarChart3, show: () => true },
+  { href: "/office/dispatch", label: "Dispatch drafts", icon: Inbox, show: (r: Role) => r !== "hr" },
+  { href: "/office/digest", label: "Daily digest", icon: Newspaper, show: () => true },
+  { href: "/office/agents", label: "Agent activity", icon: Activity, show: () => true },
 ];
 
 const ROLE_LABEL: Record<string, string> = { coordinator: "Coordinator", hr: "HR", manager: "Manager" };
@@ -85,6 +89,7 @@ export function OfficeShell({
             ))}
           </nav>
           <div className="ml-auto flex items-center gap-2 text-sm">
+            {actor && <CopilotButton />}
             <span className="rounded border border-amber-400 bg-amber-50 px-1.5 py-0.5 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-100">
               Demo: no real login
             </span>

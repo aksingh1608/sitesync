@@ -17,6 +17,7 @@ import { BRANCH_TIMEZONE } from "@/lib/config";
 import { defaultSiteId, rankSites } from "@/lib/field/sites";
 import { saveBlockedReason } from "@/lib/field/notes";
 import type { CachedFieldNote } from "@/lib/db/local";
+import { AgentReport } from "@/components/agent-report";
 
 export default function NotesPage() {
   return (
@@ -248,6 +249,14 @@ function NoteItem({ note, media, siteName, pending }: { note: CachedFieldNote; m
           Stored on the server{localUrl ? " · playing this device's copy" : ""}
         </p>
       )}
+      <AgentReport
+        transcript={note.transcript}
+        report={note.report}
+        processedAt={note.processedAt}
+        taskHref={(id) => `/field/task?id=${id}`}
+        className="text-base"
+        pendingLabel={note.kind === "voice" && note.mediaUrl ? "The report agent will read this note shortly." : null}
+      />
     </li>
   );
 }

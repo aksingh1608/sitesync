@@ -26,5 +26,16 @@ function WithView() {
   const v = params.get("view");
   const view = TASK_VIEWS.includes(v as TaskView) ? (v as TaskView) : null;
   const task = params.get("task");
-  return <TaskTable view={view} onClearView={() => router.replace("/office/tasks")} initialTaskId={task && /^[0-9a-f-]{36}$/i.test(task) ? task : null} />;
+  const uuid = (v: string | null) => (v && /^[0-9a-f-]{36}$/i.test(v) ? v : null);
+  const site = uuid(params.get("site"));
+  const assignee = uuid(params.get("assignee"));
+  return (
+    <TaskTable
+      key={`${site}|${assignee}|${task}`}
+      view={view}
+      onClearView={() => router.replace("/office/tasks")}
+      initialTaskId={uuid(task)}
+      initialFilters={site || assignee ? { ...(site ? { site } : {}), ...(assignee ? { assignee } : {}) } : undefined}
+    />
+  );
 }

@@ -121,6 +121,15 @@ export async function loadTaskDetail(db: Db, taskId: string) {
       .innerJoin(escalations, eq(escalations.id, smsMessages.escalationId))
       .where(eq(escalations.taskId, taskId)),
   ]);
+  // Tasks the report agent created point back to the note they came from.
+  const [sourceNote] =
+    task.source === "report_agent"
+      ? await db
+          .select()
+          .from(fieldNotes)
+          .where(sql`${fieldNotes.report} -> 'createdTasks' @> ${JSON.stringify([{ id: taskId }])}::jsonb`)
+          .limit(1)
+      : [];
   const noteIds = notes.map((n) => n.id);
   const history = await db
     .select({
@@ -148,6 +157,9 @@ export async function loadTaskDetail(db: Db, taskId: string) {
     receipts: receipts.map(strip),
     // The private blob pathname never leaves the server.
     notes: notes.map(({ blobPath, ...n }) => ({ ...strip(n), blobPath: null, mediaUrl: mediaUrlFor(n.id, blobPath) })),
+    sourceNote: sourceNote
+      ? (({ blobPath, ...n }) => ({ ...strip(n), blobPath: null, mediaUrl: mediaUrlFor(n.id, blobPath) }))(sourceNote)
+      : null,
     followUps: followUps.map((t) => ({ id: t.id, title: t.title, status: t.status, assigneeId: t.assigneeId, kind: t.kind })),
     parent: parent[0] ? { id: parent[0].id, title: parent[0].title } : null,
     escalations: escalationRows.map(({ seq: _s, ...e }) => (void _s, { ...e, sms: sms.find((m) => m.escalationId === e.id) ?? null })),
